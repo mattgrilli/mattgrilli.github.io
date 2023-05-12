@@ -180,6 +180,14 @@
   .with-clear-button {
     margin-right: 8px; /* add a right margin */
   }
+
+  .clear-button {
+    position: absolute;
+    top: 50%;
+    right: 10px;
+    transform: translateY(-50%);
+    /* other styles as needed */
+  }
   
   #form-toggle-button:hover, #add-snippet-button:hover,
   #form-toggle-button:focus, #add-snippet-button:focus,
@@ -326,6 +334,7 @@
     padding: 1rem;
     width: 80%;
     margin: 0 auto;
+    z-index: 2;
   }
   
   .header-title h1 {
@@ -336,12 +345,17 @@
     margin: 0;
     font-size: 0.8rem;
   }
-  
-  #search-form {
+
+
+  #search-container {
+    position: relative;
     flex-grow: 1;
     margin: 0 1rem;
+  }
+  
+  #search-form {
     box-shadow: 0px 0px #2c2f33;
-    width: 66%;
+    width: 100%;
   }
   
   #search-term {
@@ -351,15 +365,57 @@
     border-radius: 0.3rem;
   }
   
-  .toggle-form-button {
-    font-size: 2rem;
-    background-color: #7289da;
+  #clear-search {
+    position: absolute;
+    right: 0.5rem;
+    top: 0.5rem;
+    background: none;
     border: none;
+    font-size: 1.2rem;
     cursor: pointer;
-    margin-left: 1rem;
-    text-align: center;
-    width: 200px;
   }
+  
+  #search-modal {
+    position: absolute;
+    z-index: 10;
+    left: 0;
+    top: 100%;
+    width: 100%;
+    background-color: rgba(0,0,0,0.4);
+  }
+  
+  #search-content {
+    background-color: #40444b;
+    border-radius: 5px;
+    box-shadow: 2px 2px #2c2f33;
+    padding: 2rem;
+    max-width: 800px;
+    min-width: 400px;
+    position: relative;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+  
+  #close-modal {
+    position: absolute;
+    right: 1rem;
+    top: 1rem;
+    background: none;
+    border: none;
+    color: #fff;
+    font-size: 1.2rem;
+    cursor: pointer;
+  }
+  .search-result {
+    padding: 1rem;
+    cursor: pointer;
+  }
+  
+  .search-result:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+  
+  
   #menu {
   position: fixed;
   left: 0;
@@ -401,6 +457,9 @@
 /* Hidden styles */
 .hidden {
   display: none;
+}
+iframe {
+  z-index: -1;
 }
 
   

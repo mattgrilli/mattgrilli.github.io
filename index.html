@@ -2,8 +2,10 @@
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>Snipper - Code Snippet Manager</title>
+    <title>SnipLocker - Code Snippet Manager</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css">
+
   </head>
   <body>
 
@@ -12,11 +14,26 @@
         <h1>SnipLocker</h1>
         <p>A simple code snippet manager</p>
       </div>
-      <form id="search-form">
-        <input type="text" id="search-term" placeholder="Search snippets...">
-      </form>
+      <div id="search-container"> 
+        <form id="search-form">
+          <input type="text" id="search-term" placeholder="Search snippets...">
+          <button id="clear-search" class="hidden"><i class="fas fa-times"></i></button>
+        </form>
+        <div id="search-modal" class="hidden">
+          <div id="search-content">
+            <button id="close-modal"><i class="fas fa-times"></i></button>
+            <div id="search-results">
+              <!-- Display search results here -->
+            </div>
+            <div id="search-counter">
+              <!-- Display the counter here -->
+            </div>
+          </div>
+        </div>
+      </div>
       <button id="toggle-form-button" class="toggle-form-button" title="add new snippet">+</button>
     </header>
+    
     
     
     
@@ -60,6 +77,8 @@
     </ul>
     
     <script src="jumble.js"></script>
+    <script src="tags.js"></script>
+    <script src="search.js"></script>
   </body>
 </html>
 
