@@ -610,16 +610,16 @@ class Game {
                 popupMessage = 'PUSH';
                 playSound(drawSound);
                 break;
-            case 'blackjack':
-                const blackjackAmount = amount * 2.5;
-                this.player.balance += blackjackAmount;
-                gameStats.totalMoney += (blackjackAmount - amount);
-                gameStats.gamesWon++;
-                message += `Blackjack! You win $${blackjackAmount - amount}!`;
-                popupMessage = `BLACKJACK<br>$${blackjackAmount - amount}`;
-                playSound(winSound);
-                this.streakCounter = Math.max(0, this.streakCounter + 1);
-                break;
+                case 'blackjack':
+                    const blackjackAmount = amount * 2.5;
+                    this.player.balance += blackjackAmount;
+                    gameStats.totalMoney += (blackjackAmount - amount);
+                    gameStats.gamesWon++;
+                    message += `Blackjack! You win $${blackjackAmount - amount}!`;
+                    popupMessage = `BLACKJACK<br>$${blackjackAmount}`;
+                    playSound(winSound);
+                    this.streakCounter = Math.max(0, this.streakCounter + 1);
+                    break;
             case 'surrender':
                 this.player.balance += amount / 2;
                 gameStats.totalMoney -= amount / 2;
