@@ -617,7 +617,7 @@ class Game {
                     gameStats.gamesWon++;
                     message += `Blackjack! You win $${blackjackAmount - amount}!`;
                     popupMessage = `BLACKJACK<br>$${blackjackAmount}`;
-                    playSound(winSound);
+                    
                     this.streakCounter = Math.max(0, this.streakCounter + 1);
                     break;
             case 'surrender':
