@@ -8,7 +8,7 @@ No download or install needed. Just click the link above and play in your browse
 
 This is an implementation of the classic casino game Blackjack, built with HTML, CSS, and JavaScript. The game features a sleek user interface, realistic chip betting, and adherence to standard Blackjack rules.
 
-![image](https://github.com/user-attachments/assets/744ba782-4e30-4f8d-9b50-183f84f0d9a7)
+![Matt's Blackjack](screenshot.png)
 
 
 
@@ -21,7 +21,7 @@ This is an implementation of the classic casino game Blackjack, built with HTML,
 - Six-deck shoe with a randomly placed cut card
 - Dealer AI that follows standard casino rules
 - Animations for card dealing and chip movement
-- Responsive design for both desktop and mobile play
+- A felt table with three color themes, and a layout that fits on one screen from phones to desktops
 - Session and lifetime statistics tracking
 - Hot and cold streak notifications
 - **Hint** button that suggests the basic-strategy play (and advises declining insurance)

@@ -270,7 +270,7 @@ class Table {
         recordStats({ net, hands: 1, won: (outcome === 'win' || outcome === 'blackjack') ? 1 : 0 });
         this.roundMessages.push(message);
         setMessage(this.roundMessages.join(' '));
-        this.showPopupMessage(popup, handIndex);
+        this.showPopupMessage(popup, handIndex, outcome);
     }
 
     // Tells the player what is expected of them once the opening blackjack check is done.
@@ -391,7 +391,7 @@ class Table {
         });
 
         // Update the UI to show remaining cards in the shoe
-        document.getElementById('cards-remaining').textContent = `Cards in shoe: ${this.engine.deck.cardsRemaining()}`;
+        document.getElementById('cards-remaining').textContent = `${this.engine.deck.cardsRemaining()} cards`;
     }
 
     hit(handIndex) {
@@ -555,7 +555,7 @@ class Table {
         const shoeFill = document.getElementById('shoe-fill');
         shoeFill.style.height = `${fillPercentage}%`;
 
-        document.getElementById('cards-remaining').textContent = `Cards in shoe: ${remainingCards}`;
+        document.getElementById('cards-remaining').textContent = `${remainingCards} cards`;
     }
 
     animateReshuffle() {
@@ -567,14 +567,14 @@ class Table {
         }, 2000);
     }
 
-    showPopupMessage(message, handIndex) {
+    showPopupMessage(message, handIndex, outcome) {
         const handElement = document.querySelectorAll('.hand')[handIndex];
         if (!handElement) {
             console.error(`Hand element not found for index ${handIndex}`);
             return;
         }
         const popup = document.createElement('div');
-        popup.className = 'result-popup';
+        popup.className = `result-popup result-${outcome}`;
         popup.innerHTML = message;
         handElement.appendChild(popup);
 
@@ -615,8 +615,8 @@ class Table {
         document.getElementById('bet-label').textContent =
             engine.currentBet > 0 ? `Bet: $${engine.currentBet}` : 'Place your bet';
         document.getElementById('balance').textContent = `Balance: $${engine.player.balance}`;
-        document.getElementById('bet').textContent = `Current Bet: $${engine.currentBet}`;
-        document.getElementById('cards-remaining').textContent = `Cards in shoe: ${engine.deck.cardsRemaining()}`;
+        document.getElementById('bet').textContent = `Bet: $${engine.currentBet}`;
+        document.getElementById('cards-remaining').textContent = `${engine.deck.cardsRemaining()} cards`;
 
         this.renderDealer();
         this.renderHands();
@@ -644,22 +644,36 @@ class Table {
         const row = document.getElementById('dealer-cards');
         this.renderCardRow(row, cards, holeCardHidden ? 1 : -1, row.clientWidth);
 
-        const title = document.getElementById('dealer-hand').querySelector('.hand-title');
-        setText(title, (holeCardHidden || cards.length === 0)
-            ? "Dealer's Hand"
-            : `Dealer's Hand (Score: ${this.scoreOf(cards)})`);
+        // The dealer's score stays hidden while the hole card is face down.
+        const showScore = !holeCardHidden && cards.length > 0;
+        const score = document.querySelector('#dealer-hand .score');
+        score.hidden = !showScore;
+        this.showScore(score, showScore ? this.scoreOf(cards) : null);
     }
 
     renderHands() {
         const engine = this.engine;
         const container = document.getElementById('player-hands');
         const hands = engine.gamePhase === 'betting' ? [] : engine.player.hands;
-        // Each hand gets an equal share of the row, less its margin and padding.
-        const widthPerHand = container.clientWidth / Math.max(hands.length, 1) - 40;
+        container.dataset.hands = String(hands.length); // lets the stylesheet shrink cards when there are many hands
+        // Each hand gets an equal share of the row, less its margin, padding and border.
+        const widthPerHand = container.clientWidth / Math.max(hands.length, 1) - this.handChrome(container);
         syncChildren(container, hands,
             (hand, index) => `hand-${index}`,
             () => this.buildHandElement(),
             (element, hand, index) => this.updateHandElement(element, hand, index, widthPerHand));
+    }
+
+    // Horizontal space a hand uses besides its cards (margin + padding + border), read
+    // from the stylesheet so it stays right at every screen size.
+    handChrome(container) {
+        const hand = container.children[0];
+        if (!hand || typeof getComputedStyle !== 'function') {
+            return 40;
+        }
+        const style = getComputedStyle(hand);
+        return ['marginLeft', 'marginRight', 'paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth']
+            .reduce((sum, property) => sum + (parseFloat(style[property]) || 0), 0);
     }
 
     buildHandElement() {
@@ -671,6 +685,12 @@ class Table {
             parts[name].className = name === 'cards' ? 'hand-cards' : `hand-${name}`;
             element.appendChild(parts[name]);
         }
+        parts.name = document.createElement('span');
+        parts.name.className = 'hand-name';
+        parts.score = document.createElement('span');
+        parts.score.className = 'score';
+        parts.title.appendChild(parts.name);
+        parts.title.appendChild(parts.score);
         element.parts = parts;
         return element;
     }
@@ -678,11 +698,20 @@ class Table {
     updateHandElement(element, hand, index, widthPerHand) {
         const engine = this.engine;
         const cards = this.visibleCards(hand, 'player');
-        setText(element.parts.title, `Hand ${index + 1} (Score: ${this.scoreOf(cards)})`);
+        setText(element.parts.name, `Hand ${index + 1}`);
+        this.showScore(element.parts.score, this.scoreOf(cards));
         element.classList.toggle('active-hand', index === engine.currentHandIndex && engine.gamePhase === 'playerTurn');
+        element.dataset.result = hand.result || ''; // colours the hand by outcome (see styles.css)
         this.renderCardRow(element.parts.cards, cards, -1, widthPerHand);
         setText(element.parts.bet, `Bet: $${hand.bet}`);
         setText(element.parts.status, this.handStatusLabel(hand));
+    }
+
+    // The score badge: red when bust, green on 21.
+    showScore(badge, score) {
+        setText(badge, score === null ? '' : String(score));
+        badge.classList.toggle('bust', score > 21);
+        badge.classList.toggle('twenty-one', score === 21);
     }
 
     // Shows a row of cards, keeping the elements of cards that haven't changed. A card
@@ -734,7 +763,7 @@ class Table {
         if (!(needed > availableWidth)) {
             return;
         }
-        const minVisible = 22; // always leave the corner value readable
+        const minVisible = Math.min(22, Math.round(cards[0].offsetWidth * 0.3)); // keep the corner value readable
         const overlap = Math.min(step - minVisible, (needed - availableWidth) / (cards.length - 1));
         for (let i = 1; i < cards.length; i++) {
             cards[i].style.marginLeft = `-${overlap}px`;
@@ -771,12 +800,12 @@ class Table {
         // The chips in the betting circle.
         syncChildren(document.getElementById('bet-chips'), engine.chipsInPot,
             (chip, index) => `${index}:${chip}:${betting ? 1 : 0}`,
-            chip => this.buildChipElement(chip, betting, true));
+            (chip, index, isNew) => this.buildChipElement(chip, betting, true, isNew));
     }
 
-    buildChipElement(value, usable, inPot) {
+    buildChipElement(value, usable, inPot, animate = false) {
         const chip = document.createElement('div');
-        chip.className = `chip chip-${value}${usable ? '' : ' locked'}`;
+        chip.className = `chip chip-${value}${usable ? '' : ' locked'}${animate ? ' chip-in' : ''}`;
         chip.setAttribute('role', 'button');
         chip.setAttribute('aria-label', inPot ? `Remove a $${value} chip from your bet` : `Add a $${value} chip to your bet`);
         chip.tabIndex = usable ? 0 : -1;

@@ -596,7 +596,7 @@ function makeEnvironment(savedStats = null, { storageThrows = false, presets = {
       getElementById: id => node(id),
       createElement: () => new Element(),
       querySelector: selector => node(selector),
-      querySelectorAll: () => [new Element(), new Element(), new Element(), new Element()],
+      querySelectorAll: selector => (selector === '.hand' ? node('player-hands').children : []),
       addEventListener() {}
     },
     localStorage: {
@@ -910,14 +910,17 @@ test('Page: hand elements persist and are updated, not rebuilt', () => {
   const env = makeEnvironment();
   uiDeal(env, ['8', '10', '8', '7', '10', '9', 'K']);
   const hand = env.node('player-hands').children[0];
-  assert.equal(hand.parts.title.textContent, 'Hand 1 (Score: 16)');
+  assert.equal(hand.parts.name.textContent, 'Hand 1');
+  assert.equal(hand.parts.score.textContent, '16');
   assert.equal(hand.classList.contains('active-hand'), true);
   env.game.split(0);
   assert.equal(env.node('player-hands').children.length, 2);
   assert.equal(env.node('player-hands').children[0], hand); // same element, new contents
-  assert.equal(hand.parts.title.textContent, 'Hand 1 (Score: 18)');
+  assert.equal(hand.parts.score.textContent, '18');
   env.game.hit(0); // bust
   assert.equal(hand.parts.status.textContent, 'BUST');
+  assert.equal(hand.parts.score.classList.contains('bust'), true); // the badge turns red
+  assert.equal(hand.dataset.result, 'loss');
   assert.equal(hand.classList.contains('active-hand'), false);
   assert.equal(env.node('player-hands').children[1].classList.contains('active-hand'), true);
   env.game.stand(1);
@@ -961,6 +964,55 @@ test('Page: chips you cannot afford are locked in the rack', () => {
   const locked = env.node('chip-container').children.filter(chip => chip.classList.contains('locked'));
   assert.deepEqual(locked.map(chip => chip.dataset.key.split(':')[0]), ['100', '500', '1000']);
   assert.equal(locked[0].tabIndex, -1);
+});
+
+test('Page: results colour the hand and its popup by outcome', () => {
+  const env = makeEnvironment();
+  uiDeal(env, ['10', '10', 'K', '8']);
+  env.game.stand(0);
+  env.advance(1000); // the dealer stands on 18 and the hand settles
+  const hand = env.node('player-hands').children[0];
+  assert.equal(hand.dataset.result, 'win');
+  const popup = hand.children.find(child => child.className.includes('result-popup'));
+  assert.ok(popup, 'a result popup is shown on the hand');
+  assert.ok(popup.classList.contains('result-win'));
+  assert.match(popup.innerHTML, /WIN/);
+  env.flushTimers();
+  assert.equal(hand.children.some(child => child.className.includes('result-popup')), false); // it fades away
+  assert.equal(hand.dataset.result, 'win'); // the hand keeps its colour
+});
+
+test('Page: the dealer\'s score badge stays hidden until the hole card is revealed', () => {
+  const env = makeEnvironment();
+  const badge = env.node('#dealer-hand .score');
+  uiDeal(env, ['10', '10', 'K', '8']);
+  assert.equal(badge.hidden, true);
+  assert.equal(badge.textContent, '');
+  env.game.stand(0);
+  env.flushTimers();
+  assert.equal(badge.hidden, false);
+  assert.equal(badge.textContent, '18');
+  env.game.prepareNextHand();
+  assert.equal(badge.hidden, true); // nothing dealt yet
+});
+
+test('Page: score badges highlight 21 and busts', () => {
+  const env = makeEnvironment();
+  uiDeal(env, ['A', '10', 'K', '9']); // blackjack
+  const score = env.node('player-hands').children[0].parts.score;
+  assert.equal(score.textContent, '21');
+  assert.equal(score.classList.contains('twenty-one'), true);
+  assert.equal(score.classList.contains('bust'), false);
+});
+
+test('Page: chips added to the bet pop in, but the rest do not', () => {
+  const env = makeEnvironment();
+  env.game.placeBet(25);
+  const first = env.node('bet-chips').children[0];
+  assert.equal(first.classList.contains('chip-in'), true);
+  env.game.placeBet(100);
+  assert.equal(env.node('bet-chips').children[0], first); // untouched
+  assert.equal(env.node('bet-chips').children[1].classList.contains('chip-in'), true);
 });
 
 test('Page: fuzz - 300 random rounds through the page keep balance and statistics in step', () => {

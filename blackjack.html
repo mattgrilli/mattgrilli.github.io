@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Matt's Blackjack</title>
+    <meta name="theme-color" content="#0a4a2c">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230a4a2c'/%3E%3Ctext x='32' y='47' font-size='42' text-anchor='middle' fill='%23ffd54a'%3E%E2%99%A0%3C/text%3E%3C/svg%3E">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -13,13 +15,13 @@
             <div id="game-info">
                 <div id="stats-bar">
                     <div id="balance">Balance: $1000</div>
-                    <div id="bet">Current Bet: $0</div>
+                    <div id="bet">Bet: $0</div>
                 </div>
-                <div id="shoe-container">
+                <div id="shoe-container" title="Cards left in the shoe">
                     <div id="shoe">
                         <div id="shoe-fill"></div>
                     </div>
-                    <div id="cards-remaining">Cards in shoe: 312</div>
+                    <div id="cards-remaining">312 cards</div>
                 </div>
             </div>
             <div id="top-buttons">
@@ -31,7 +33,7 @@
         <div id="message" role="status" aria-live="polite"></div>
 
         <div id="dealer-hand">
-            <div class="hand-title">Dealer's Hand</div>
+            <div class="hand-title"><span class="hand-name">Dealer's Hand</span><span class="score" hidden></span></div>
             <div id="dealer-cards"></div>
         </div>
 
@@ -51,7 +53,7 @@
                 <div id="bet-controls">
                     <button id="clear-bet">Clear Bet</button>
                     <button id="rebet">Rebet</button>
-                    <input type="number" id="bet-amount" min="1" step="1" inputmode="numeric" placeholder="Bet amount" aria-label="Bet amount in dollars">
+                    <input type="number" id="bet-amount" min="1" step="1" inputmode="numeric" placeholder="Amount" aria-label="Bet amount in dollars">
                     <button id="set-bet">Set Bet</button>
                     <button id="deal">Deal</button>
                 </div>
