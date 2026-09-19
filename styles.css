@@ -145,7 +145,7 @@ h1 {
     gap: 8px;
 }
 
-#mute, #change-theme {
+#mute, #toggle-hints, #change-theme {
     padding: 6px 12px;
     font-size: 13px;
 }
@@ -1023,7 +1023,7 @@ button:focus-visible,
         font-size: 14px;
     }
 
-    #mute, #change-theme {
+    #mute, #toggle-hints, #change-theme {
         padding: 5px 8px;
         font-size: 11.5px;
     }

@@ -29,13 +29,31 @@ function writeStorage(key, value) {
 let soundMuted = readStorage('blackjackMuted') === '1';
 
 function updateMuteButton() {
-    document.getElementById('mute').textContent = soundMuted ? 'Sound: Off' : 'Sound: On';
+    const button = document.getElementById('mute');
+    button.textContent = soundMuted ? 'Sound: Off' : 'Sound: On';
+    button.setAttribute('aria-pressed', String(!soundMuted));
 }
 
 function toggleMute() {
     soundMuted = !soundMuted;
     writeStorage('blackjackMuted', soundMuted ? '1' : '0');
     updateMuteButton();
+}
+
+// Hints (the Hint button) can be switched off for players who would rather not see them.
+let hintsEnabled = readStorage('blackjackHints') !== '0';
+
+function updateHintsButton() {
+    const button = document.getElementById('toggle-hints');
+    button.textContent = hintsEnabled ? 'Hints: On' : 'Hints: Off';
+    button.setAttribute('aria-pressed', String(hintsEnabled));
+}
+
+function toggleHints() {
+    hintsEnabled = !hintsEnabled;
+    writeStorage('blackjackHints', hintsEnabled ? '1' : '0');
+    updateHintsButton();
+    game.updateActionButtons();
 }
 
 // Function to play sound
@@ -458,6 +476,9 @@ class Table {
     }
 
     hint() {
+        if (!hintsEnabled) {
+            return;
+        }
         const hint = this.engine.getHint();
         if (!hint) {
             return;
@@ -781,7 +802,9 @@ class Table {
         document.getElementById('deal').disabled = this.engine.gamePhase !== 'betting' || this.engine.currentBet === 0;
         document.getElementById('insurance').style.display = this.engine.canInsurance() ? 'inline-block' : 'none';
         document.getElementById('decline-insurance').style.display = this.engine.canDeclineInsurance() ? 'inline-block' : 'none';
-        document.getElementById('hint').disabled = !this.engine.canHint();
+        const hintButton = document.getElementById('hint');
+        hintButton.style.display = hintsEnabled ? '' : 'none';
+        hintButton.disabled = !this.engine.canHint();
         document.getElementById('clear-bet').disabled = this.engine.gamePhase !== 'betting';
         document.getElementById('next-hand').style.display = this.engine.isBroke() ? 'none' : 'inline-block';
         document.getElementById('rebet').disabled = !this.engine.canRebet();
@@ -882,7 +905,9 @@ document.getElementById('insurance').addEventListener('click', () => game.buyIns
 document.getElementById('decline-insurance').addEventListener('click', () => game.declineInsurance());
 document.getElementById('hint').addEventListener('click', () => game.hint());
 document.getElementById('mute').addEventListener('click', toggleMute);
+document.getElementById('toggle-hints').addEventListener('click', toggleHints);
 updateMuteButton();
+updateHintsButton();
 document.getElementById('next-hand').addEventListener('click', () => game.prepareNextHand());
 document.getElementById('clear-bet').addEventListener('click', () => game.clearBet());
 document.getElementById('rebet').addEventListener('click', () => game.rebet());

@@ -614,7 +614,7 @@ function makeEnvironment(savedStats = null, { storageThrows = false, presets = {
     }
   });
   const source = fs.readFileSync(enginePath, 'utf8') + '\n' + fs.readFileSync(scriptPath, 'utf8');
-  vm.runInContext(source + '\n;globalThis.pageExports = { game, getStats: () => ({...gameStats}), getSession: () => ({...sessionStats}), toggleMute, isMuted: () => soundMuted, describeCard };', context, { filename: 'engine.js+script.js' });
+  vm.runInContext(source + '\n;globalThis.pageExports = { game, getStats: () => ({...gameStats}), getSession: () => ({...sessionStats}), toggleMute, isMuted: () => soundMuted, toggleHints, hintsOn: () => hintsEnabled, describeCard };', context, { filename: 'engine.js+script.js' });
   // Runs timers that are due within the next `ms` milliseconds (and any they schedule).
   function advance(ms) {
     const until = now + ms;
@@ -828,6 +828,53 @@ test('Page: hint messages', () => {
   uiDeal(ins, ['10', 'A', '9', '7']);
   ins.game.hint();
   assert.match(ins.node('message').textContent, /decline insurance/);
+});
+
+test('Page: hints can be switched off, which hides the Hint button, and the choice is remembered', () => {
+  const env = makeEnvironment();
+  assert.equal(env.hintsOn(), true); // on by default
+  assert.equal(env.node('toggle-hints').textContent, 'Hints: On');
+  assert.notEqual(env.node('hint').style.display, 'none');
+  uiDeal(env, ['10', '10', '6', '5', '2']); // 16 vs 10
+  env.game.hint();
+  assert.match(env.node('message').textContent, /Surrender/);
+
+  env.toggleHints();
+  assert.equal(env.hintsOn(), false);
+  assert.equal(env.node('toggle-hints').textContent, 'Hints: Off');
+  assert.equal(env.node('toggle-hints').getAttribute('aria-pressed'), 'false');
+  assert.equal(env.node('hint').style.display, 'none'); // hidden straight away, mid-hand
+  assert.equal(env.storage.get('blackjackHints'), '0');
+  env.game.hit(0); // now the message changes, and a hint must not bring it back
+  const before = env.node('message').textContent;
+  env.game.hint();
+  assert.equal(env.node('message').textContent, before);
+
+  env.toggleHints();
+  assert.equal(env.hintsOn(), true);
+  assert.notEqual(env.node('hint').style.display, 'none');
+  assert.equal(env.storage.get('blackjackHints'), '1');
+});
+
+test('Page: the hints setting is restored on load, and insurance hints obey it too', () => {
+  const off = makeEnvironment(null, { presets: { blackjackHints: '0' } });
+  assert.equal(off.hintsOn(), false);
+  assert.equal(off.node('toggle-hints').textContent, 'Hints: Off');
+  assert.equal(off.node('hint').style.display, 'none');
+  uiDeal(off, ['10', 'A', '9', '7']); // insurance phase
+  assert.equal(off.game.engine.gamePhase, 'insurance');
+  off.game.hint();
+  assert.doesNotMatch(off.node('message').textContent, /decline insurance/);
+  assert.equal(off.node('hint').style.display, 'none');
+  // the engine itself still knows the answer; only the page hides it
+  assert.equal(off.game.engine.getHint(), 'decline-insurance');
+});
+
+test('Page: the hints setting survives blocked storage', () => {
+  const env = makeEnvironment(null, { storageThrows: true });
+  assert.equal(env.hintsOn(), true);
+  env.toggleHints();
+  assert.equal(env.hintsOn(), false);
 });
 
 test('Page: cards have screen-reader descriptions', () => {
