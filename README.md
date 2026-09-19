@@ -1,5 +1,9 @@
 # Advanced Blackjack Game
 
+## ▶️ [Play Now](https://mattgrilli.github.io/blackjack.html)
+
+No download or install needed. Just click the link above and play in your browser.
+
 ## Overview
 
 This is an implementation of the classic casino game Blackjack, built with HTML, CSS, and JavaScript. The game features a sleek user interface, realistic chip betting, and adherence to standard Blackjack rules.
@@ -19,15 +23,17 @@ This is an implementation of the classic casino game Blackjack, built with HTML,
 - Basic strategy hints
 - Hot and cold streak notifications
 
-## Installation
+## Running Locally
+
+To play online, use the [Play Now](https://mattgrilli.github.io/blackjack.html) link above. To run your own copy:
 
 1. Clone the repository:
    ```
-   git clone https://github.com/mattgrilli/bjc.git
+   git clone https://github.com/mattgrilli/mattgrilli.github.io.git
    ```
 2. Navigate to the project directory:
    ```
-   cd bjc
+   cd mattgrilli.github.io
    ```
 3. Open `blackjack.html` in your web browser to start the game.
 
