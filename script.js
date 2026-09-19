@@ -25,13 +25,34 @@ function loadStats() {
     return stats ? JSON.parse(stats) : { gamesPlayed: 0, gamesWon: 0, totalMoney: 0 };
 }
 
-// Update stats display
-function updateStatsDisplay() {
-    document.getElementById('stats').textContent = `Games Played: ${gameStats.gamesPlayed} | Games Won: ${gameStats.gamesWon} | Total Won/Lost: $${gameStats.totalMoney}`;
+function formatMoney(amount) {
+    return `${amount < 0 ? '-' : ''}$${Math.abs(amount)}`;
 }
 
-// Initial game statistics
+// Update stats display
+function updateStatsDisplay() {
+    const line = (label, stats) =>
+        `${label}: Games Played: ${stats.gamesPlayed} | Games Won: ${stats.gamesWon} | Total Won/Lost: ${formatMoney(stats.totalMoney)}`;
+    document.getElementById('stats').innerHTML =
+        `<div>${line('Session', sessionStats)}</div><div>${line('Lifetime', gameStats)}</div>`;
+}
+
+// Lifetime statistics persist in localStorage; session statistics start fresh
+// on every page load, together with the bankroll.
 let gameStats = loadStats();
+let sessionStats = { gamesPlayed: 0, gamesWon: 0, totalMoney: 0 };
+
+// Record settled hands and/or money movement in both the session and lifetime stats.
+function recordStats({ net = 0, hands = 0, won = 0 }) {
+    for (const stats of [gameStats, sessionStats]) {
+        stats.gamesPlayed += hands;
+        stats.gamesWon += won;
+        stats.totalMoney += net;
+    }
+    saveStats();
+    updateStatsDisplay();
+}
+
 updateStatsDisplay();
 
 class Deck {
@@ -55,10 +76,12 @@ class Deck {
     }
 
     setNewCutCard() {
-        // Place cut card randomly in last quarter of the shoe
-        const minPosition = Math.floor(this.cards.length * 0.75);
-        const maxPosition = this.cards.length - 20; // Ensure at least 20 cards after cut card
-        this.cutCard = Math.floor(Math.random() * (maxPosition - minPosition + 1)) + minPosition;
+        // The cut card sits somewhere in the last quarter of the shoe, but never with
+        // fewer than 20 cards behind it. It is stored as a number of cards REMAINING:
+        // once the shoe is down to that many cards, the next round is the last one.
+        const minRemaining = 20;
+        const maxRemaining = Math.floor(this.cards.length * 0.25);
+        this.cutAtCardsRemaining = Math.floor(Math.random() * (maxRemaining - minRemaining + 1)) + minRemaining;
     }
 
     shuffle() {
@@ -69,7 +92,7 @@ class Deck {
     }
 
     deal() {
-        if (this.cards.length <= this.cutCard && !this.reshuffleNeeded) {
+        if (this.cards.length <= this.cutAtCardsRemaining && !this.reshuffleNeeded) {
             this.reshuffleNeeded = true;
             return { card: this.cards.pop(), isLastHand: true };
         }
@@ -90,7 +113,9 @@ class Hand {
         this.cards = [];
         this.bet = 0;
         this.doubledDown = false;
-        this.surrendered = false;
+        this.done = false;      // player has finished acting on this hand (stood, doubled, ...)
+        this.settled = false;   // the hand has been paid out; it can never be settled again
+        this.result = null;     // 'win' | 'loss' | 'push' | 'blackjack' | 'surrender'
     }
 
     addCard(card) {
@@ -139,23 +164,30 @@ class Player {
         playSound(chipSound);
     }
 
-    win(handIndex) {
-        this.balance += this.hands[handIndex].bet * 2;
-        this.hands[handIndex].bet = 0;
-    }
-
-    lose(handIndex) {
-        this.hands[handIndex].bet = 0;
-    }
-
-    push(handIndex) {
-        this.balance += this.hands[handIndex].bet;
-        this.hands[handIndex].bet = 0;
-    }
-
-    blackjack(handIndex) {
-        this.balance += this.hands[handIndex].bet * 2.5;
-        this.hands[handIndex].bet = 0;
+    // The only place a hand's wager is paid out. Returns { wager, payout, net },
+    // or null if the hand was already settled (so it can never pay twice).
+    // hand.bet is left intact so the wager can still be displayed and reported.
+    settle(handIndex, outcome) {
+        const hand = this.hands[handIndex];
+        if (!hand || hand.settled) {
+            return null;
+        }
+        const wager = hand.bet;
+        const payouts = {
+            win: wager * 2,
+            loss: 0,
+            push: wager,
+            blackjack: wager * 2.5,
+            surrender: wager / 2
+        };
+        if (!(outcome in payouts)) {
+            throw new Error(`Unknown outcome: ${outcome}`);
+        }
+        const payout = payouts[outcome];
+        this.balance += payout;
+        hand.settled = true;
+        hand.result = outcome;
+        return { wager, payout, net: payout - wager };
     }
 
     doubleDown(handIndex) {
@@ -173,12 +205,6 @@ class Player {
         this.balance -= newHand.bet;
         this.hands.splice(handIndex + 1, 0, newHand);
         playSound(chipSound);
-    }
-
-    surrender(handIndex) {
-        this.balance += this.hands[handIndex].bet / 2;
-        this.hands[handIndex].bet = 0;
-        this.hands[handIndex].surrendered = true;
     }
 
     placeInsurance(amount) {
@@ -218,6 +244,8 @@ class Game {
         this.themes = ['theme1', 'theme2', 'theme3'];
         this.currentTheme = 0;
         this.lastHandBeforeReshuffle = false;
+        this.roundMessages = [];  // result messages collected over the current round
+        this.pendingPopups = [];  // per-hand result popups waiting for the next render
     }
 
     initializeChips() {
@@ -245,6 +273,10 @@ class Game {
     }
 
     removeBet(amount) {
+        if (this.gamePhase !== 'betting') {
+            setMessage('Bets are locked once dealing begins.');
+            return false;
+        }
         const index = this.chipsInPot.indexOf(amount);
         if (index > -1) {
             this.chipsInPot.splice(index, 1);
@@ -253,24 +285,37 @@ class Game {
             this.updateUI();
             setMessage(`Removed $${amount} from the bet. Total bet: $${this.currentBet}`);
             playSound(chipSound);
+            return true;
         }
+        return false;
     }
 
     clearBet() {
+        if (this.gamePhase !== 'betting') {
+            setMessage('Bets are locked once dealing begins.');
+            return false;
+        }
         this.player.balance += this.currentBet;
         this.currentBet = 0;
         this.chipsInPot = [];
         this.updateUI();
         setMessage("Bet cleared.");
         playSound(chipSound);
+        return true;
     }
 
     deal() {
+        if (this.gamePhase !== 'betting') {
+            return;
+        }
         if (this.currentBet === 0) {
             setMessage("Please place a bet first.");
             return;
         }
 
+        this.roundMessages = [];
+        this.pendingPopups = [];
+        this.player.insurance = 0;
         this.player.hands = [new Hand()];
         this.player.hands[0].bet = this.currentBet;
         this.dealer = new Hand();
@@ -305,12 +350,9 @@ class Game {
 
                 if (index === dealSequence.length - 1) {
                     setTimeout(() => {
-                        this.gamePhase = 'playerTurn';
                         this.currentHandIndex = 0;
-                        this.checkForBlackjack();
-                        this.updateUI();
                         this.updateShoeDisplay();
-                        this.offerInsurance();
+                        this.beginPlay();
                     }, 500);
                 }
             }, index * 500);
@@ -387,16 +429,32 @@ class Game {
         `;
     }
 
-    hit(handIndex) {
-        const { card, isLastHand } = this.deck.deal();
-        this.player.hands[handIndex].addCard(card);
+    noteCutCard(isLastHand) {
         if (isLastHand && !this.lastHandBeforeReshuffle) {
             this.lastHandBeforeReshuffle = true;
             this.showCutCard();
         }
-        if (this.player.hands[handIndex].getScore() > 21) {
-            this.endHand('loss', handIndex);
-        } else if (this.player.hands[handIndex].doubledDown) {
+    }
+
+    hit(handIndex) {
+        if (!this.canHit(handIndex)) {
+            return;
+        }
+        this.drawToHand(handIndex);
+    }
+
+    // Deals one card to a hand and resolves a bust or a doubled hand.
+    // Shared by hit and double down so a doubled hand can take its one card.
+    drawToHand(handIndex) {
+        const hand = this.player.hands[handIndex];
+        const { card, isLastHand } = this.deck.deal();
+        hand.addCard(card);
+        this.noteCutCard(isLastHand);
+        if (hand.getScore() > 21) {
+            hand.done = true;
+            this.settleHand(handIndex, 'loss');
+            this.advanceToNextHand();
+        } else if (hand.doubledDown) {
             this.stand(handIndex);
         }
         this.updateUI();
@@ -404,87 +462,135 @@ class Game {
     }
 
     stand(handIndex) {
-        this.nextHand();
+        this.player.hands[handIndex].done = true;
+        this.advanceToNextHand();
+    }
+
+    // Moves to the next hand that still needs playing. When there is none, the
+    // dealer plays if any hand is still live; otherwise the round is over.
+    advanceToNextHand() {
+        const next = this.player.hands.findIndex((hand, index) => index > this.currentHandIndex && !hand.settled);
+        if (next !== -1) {
+            this.currentHandIndex = next;
+            this.updateUI();
+        } else if (this.player.hands.some(hand => !hand.settled)) {
+            this.dealerPlay();
+        } else {
+            this.finishRound();
+        }
     }
 
     doubleDown(handIndex) {
-        const hand = this.player.hands[handIndex];
-        if (this.player.balance >= hand.bet && hand.cards.length === 2) {
-            this.player.doubleDown(handIndex);
-            this.hit(handIndex);
-        } else {
+        if (!this.canDouble(handIndex)) {
             setMessage("Cannot double down. Insufficient funds or more than two cards in hand.");
+            return;
         }
-        this.updateUI();
+        this.player.doubleDown(handIndex);
+        this.drawToHand(handIndex);
     }
 
     split(handIndex) {
-        const hand = this.player.hands[handIndex];
-        if (this.player.balance >= hand.bet && hand.canSplit()) {
-            this.player.split(handIndex);
-            const { card: card1, isLastHand: isLastHand1 } = this.deck.deal();
-            const { card: card2, isLastHand: isLastHand2 } = this.deck.deal();
-            this.player.hands[handIndex].addCard(card1);
-            this.player.hands[handIndex + 1].addCard(card2);
-            if ((isLastHand1 || isLastHand2) && !this.lastHandBeforeReshuffle) {
-                this.lastHandBeforeReshuffle = true;
-                this.showCutCard();
-            }
-            this.updateUI();
-        } else {
-            setMessage("Cannot split. Insufficient funds or cards don't match.");
+        if (!this.canSplit(handIndex)) {
+            setMessage("Cannot split. Cards must match, you need funds for the extra bet, and four hands is the limit.");
+            return;
         }
+        this.player.split(handIndex);
+        const { card: card1, isLastHand: isLastHand1 } = this.deck.deal();
+        const { card: card2, isLastHand: isLastHand2 } = this.deck.deal();
+        this.player.hands[handIndex].addCard(card1);
+        this.player.hands[handIndex + 1].addCard(card2);
+        this.noteCutCard(isLastHand1 || isLastHand2);
+        this.updateUI();
+        this.updateShoeDisplay();
     }
 
     surrender() {
-        if (this.gamePhase === 'playerTurn' && this.player.hands[this.currentHandIndex].cards.length === 2) {
-            this.player.surrender(this.currentHandIndex);
-            this.endHand('surrender', this.currentHandIndex);
-        } else {
+        if (!this.canSurrender()) {
             setMessage("You can only surrender on your first action.");
+            return;
+        }
+        const handIndex = this.currentHandIndex;
+        this.player.hands[handIndex].done = true;
+        this.settleHand(handIndex, 'surrender');
+        this.advanceToNextHand();
+    }
+
+    // Called once the initial deal is complete. The dealer's blackjack is only
+    // checked after the player has had the chance to take (or decline) insurance.
+    beginPlay() {
+        if (this.canOfferInsurance()) {
+            this.gamePhase = 'insurance';
+            setMessage("Dealer's up card is an Ace. Would you like to buy insurance?");
+            this.updateUI();
+        } else {
+            this.resolveOpeningHands();
         }
     }
 
-    offerInsurance() {
-        if (this.allowInsurance && 
-            this.gamePhase === 'playerTurn' && 
-            this.dealer.cards[0].value === 'A' && 
-            this.player.hands[0].cards.length === 2 && // Only offer on initial deal
-            this.player.balance >= this.player.hands[0].bet / 2) {
-            setMessage("Dealer's up card is an Ace. Would you like to buy insurance?");
-            document.getElementById('insurance').style.display = 'inline-block';
-        } else {
-            document.getElementById('insurance').style.display = 'none';
-        }
+    canOfferInsurance() {
+        return this.allowInsurance &&
+               this.dealer.cards[0].value === 'A' &&
+               this.player.balance >= this.player.hands[0].bet / 2;
     }
 
     buyInsurance() {
-        const insuranceAmount = this.player.hands[0].bet / 2;
-        try {
-            this.player.placeInsurance(insuranceAmount);
-            setMessage("Insurance bought.");
-            document.getElementById('insurance').style.display = 'none';
-            if (this.dealer.getScore() === 21) {
-                this.player.winInsurance();
-                setMessage("Dealer has Blackjack. Insurance pays 2:1.");
-                this.endHand('loss', 0);
-            } else {
-                this.player.loseInsurance();
-                setMessage("Dealer does not have Blackjack. Insurance lost.");
-            }
-        } catch (error) {
-            setMessage(error.message);
+        if (!this.canInsurance()) {
+            return;
         }
-        this.updateUI();
+        const insuranceAmount = this.player.hands[0].bet / 2;
+        this.player.placeInsurance(insuranceAmount);
+        this.roundMessages.push(`Insurance bought for $${insuranceAmount}.`);
+        this.resolveOpeningHands();
     }
 
-    nextHand() {
-        this.currentHandIndex++;
-        if (this.currentHandIndex >= this.player.hands.length) {
-            this.dealerPlay();
-        } else {
-            this.updateUI();
+    declineInsurance() {
+        if (!this.canDeclineInsurance()) {
+            return;
         }
+        this.resolveOpeningHands();
+    }
+
+    settleInsurance(dealerHasBlackjack) {
+        const stake = this.player.insurance;
+        if (dealerHasBlackjack) {
+            this.player.winInsurance();
+            recordStats({ net: stake * 2 });
+            this.roundMessages.push(`Dealer has Blackjack. Insurance pays 2:1 (+$${stake * 2}).`);
+        } else {
+            this.player.loseInsurance();
+            recordStats({ net: -stake });
+            this.roundMessages.push(`Dealer does not have Blackjack. Insurance lost (-$${stake}).`);
+        }
+    }
+
+    // Checks both sides for blackjack (after any insurance decision) and either
+    // settles the round immediately or hands control to the player.
+    resolveOpeningHands() {
+        const hand = this.player.hands[0];
+        const playerBlackjack = hand.getScore() === 21;
+        const dealerBlackjack = this.dealer.getScore() === 21;
+
+        if (this.player.insurance > 0) {
+            this.settleInsurance(dealerBlackjack);
+        }
+
+        if (playerBlackjack && dealerBlackjack) {
+            this.showBlackjackPopup("Double Blackjack!");
+            this.settleHand(0, 'push', "Both have Blackjack! It's a push.");
+        } else if (playerBlackjack) {
+            this.showBlackjackPopup("Blackjack!");
+            this.settleHand(0, 'blackjack');
+        } else if (dealerBlackjack) {
+            this.showBlackjackPopup("Dealer Blackjack!");
+            this.settleHand(0, 'loss', "Dealer has Blackjack! You lose.");
+        } else {
+            this.gamePhase = 'playerTurn';
+            this.currentHandIndex = 0;
+            this.updateUI();
+            return;
+        }
+        hand.done = true;
+        this.finishRound();
     }
 
     dealerPlay() {
@@ -507,10 +613,7 @@ class Game {
                     const { card, isLastHand } = this.deck.deal();
                     this.dealer.addCard(card);
                     this.animateDealCard(this.dealer, card, true, this.dealer.cards.length - 1);
-                    if (isLastHand && !this.lastHandBeforeReshuffle) {
-                        this.lastHandBeforeReshuffle = true;
-                        this.showCutCard();
-                    }
+                    this.noteCutCard(isLastHand);
                     this.updateUI();
                 }
                 this.determineWinner();
@@ -523,130 +626,109 @@ class Game {
     determineWinner() {
         const dealerScore = this.dealer.getScore();
         this.player.hands.forEach((hand, index) => {
-            if (hand.surrendered) {
+            if (hand.settled) {
                 return;
             }
             const playerScore = hand.getScore();
             if (playerScore > 21) {
-                this.endHand('loss', index);
-            } else if (dealerScore > 21) {
-                this.endHand('win', index);
-            } else if (playerScore > dealerScore) {
-                this.endHand('win', index);
+                this.settleHand(index, 'loss');
+            } else if (dealerScore > 21 || playerScore > dealerScore) {
+                this.settleHand(index, 'win');
             } else if (playerScore < dealerScore) {
-                this.endHand('loss', index);
+                this.settleHand(index, 'loss');
             } else {
-                this.endHand('push', index);
+                this.settleHand(index, 'push');
             }
         });
+        this.finishRound();
     }
 
-    checkForBlackjack() {
-        const playerScore = this.player.hands[0].getScore();
-        const dealerScore = this.dealer.getScore();
-    
-        const showBlackjackPopup = (message) => {
-            const popup = document.createElement('div');
-            popup.className = 'blackjack-popup';
-            popup.textContent = message;
-            document.body.appendChild(popup);
-    
-            // Play a special sound for Blackjack
-            const blackjackSound = new Audio('sounds/blackjack.mp3'); // Make sure you have this sound file
-            blackjackSound.play();
-    
+    showBlackjackPopup(message) {
+        const popup = document.createElement('div');
+        popup.className = 'blackjack-popup';
+        popup.textContent = message;
+        document.body.appendChild(popup);
+
+        // Play a special sound for Blackjack
+        const blackjackSound = new Audio('sounds/blackjack.mp3');
+        blackjackSound.play();
+
+        setTimeout(() => {
+            popup.style.animation = 'none'; // Stop the animation
+            popup.offsetHeight; // Trigger reflow
+            popup.style.animation = null; // Remove the animation property
+            popup.style.opacity = '0';
+            popup.style.transform = 'translate(-50%, -50%) scale(0.5)';
+            popup.style.transition = 'opacity 0.3s, transform 0.3s';
+
             setTimeout(() => {
-                popup.style.animation = 'none'; // Stop the animation
-                popup.offsetHeight; // Trigger reflow
-                popup.style.animation = null; // Remove the animation property
-                popup.style.opacity = '0';
-                popup.style.transform = 'translate(-50%, -50%) scale(0.5)';
-                popup.style.transition = 'opacity 0.3s, transform 0.3s';
-                
-                setTimeout(() => {
-                    popup.remove();
-                }, 300);
-            }, 3000);
-        };
-    
-        if (playerScore === 21 && dealerScore === 21) {
-            showBlackjackPopup("Double Blackjack!");
-            this.endHand('push', 0, "Both have Blackjack! It's a push.");
-        } else if (playerScore === 21) {
-            showBlackjackPopup("Blackjack!");
-            this.endHand('blackjack', 0);
-        } else if (dealerScore === 21) {
-            showBlackjackPopup("Dealer Blackjack!");
-            this.endHand('loss', 0, "Dealer has Blackjack! You lose.");
-        }
+                popup.remove();
+            }, 300);
+        }, 3000);
     }
 
-    endHand(result, handIndex = 0, customMessage = null) {
-        const hand = this.player.hands[handIndex];
-        let amount = hand.bet;
-        let message = customMessage || `Hand ${handIndex + 1}: `;
+    // Pays and records ONE hand, exactly once. It does not end the round: other
+    // split hands may still be in play (see advanceToNextHand / finishRound).
+    settleHand(handIndex, outcome, customMessage = null) {
+        const settlement = this.player.settle(handIndex, outcome);
+        if (!settlement) {
+            return;
+        }
+        const { wager, net } = settlement;
+        let text = '';
         let popupMessage = '';
 
-        switch (result) {
+        switch (outcome) {
             case 'win':
-                this.player.balance += amount * 2;
-                gameStats.totalMoney += amount;
-                gameStats.gamesWon++;
-                message += `You win $${amount}!`;
-                popupMessage = `WIN<br>$${amount}`;
+                text = `You win $${net}!`;
+                popupMessage = `WIN<br>$${net}`;
                 playSound(winSound);
                 this.streakCounter = Math.max(0, this.streakCounter + 1);
                 break;
             case 'loss':
-                gameStats.totalMoney -= amount;
-                message += `You lose $${amount}.`;
-                popupMessage = `LOSE<br>$${amount}`;
+                text = `You lose $${wager}.`;
+                popupMessage = `LOSE<br>$${wager}`;
                 playSound(loseSound);
                 this.streakCounter = Math.min(0, this.streakCounter - 1);
                 break;
             case 'push':
-                this.player.balance += amount;
-                message += "It's a push. Your bet is returned.";
+                text = "It's a push. Your bet is returned.";
                 popupMessage = 'PUSH';
                 playSound(drawSound);
                 break;
-                case 'blackjack':
-                    const blackjackAmount = amount * 2.5;
-                    this.player.balance += blackjackAmount;
-                    gameStats.totalMoney += (blackjackAmount - amount);
-                    gameStats.gamesWon++;
-                    message += `Blackjack! You win $${blackjackAmount - amount}!`;
-                    popupMessage = `BLACKJACK<br>$${blackjackAmount}`;
-                    
-                    this.streakCounter = Math.max(0, this.streakCounter + 1);
-                    break;
+            case 'blackjack':
+                text = `Blackjack! You win $${net}!`;
+                popupMessage = `BLACKJACK<br>$${net}`;
+                this.streakCounter = Math.max(0, this.streakCounter + 1);
+                break;
             case 'surrender':
-                this.player.balance += amount / 2;
-                gameStats.totalMoney -= amount / 2;
-                message += `You surrendered. Half of your bet ($${amount / 2}) is returned.`;
-                popupMessage = `SURRENDER<br>$${amount / 2} returned`;
+                text = `You surrendered. Half of your bet ($${wager / 2}) is returned.`;
+                popupMessage = `SURRENDER<br>$${wager / 2} returned`;
                 playSound(drawSound);
                 this.streakCounter = 0;
                 break;
         }
 
-        gameStats.gamesPlayed++;
-        saveStats();
-        updateStatsDisplay();
-        this.showPopupMessage(popupMessage, handIndex);
-        setMessage(message);
-        this.gamePhase = 'gameOver';
-        this.updateUI();
-        document.getElementById('next-hand').style.display = 'inline-block';
+        recordStats({ net, hands: 1, won: (outcome === 'win' || outcome === 'blackjack') ? 1 : 0 });
+        this.roundMessages.push(customMessage || `Hand ${handIndex + 1}: ${text}`);
+        setMessage(this.roundMessages.join(' '));
+        this.pendingPopups.push({ message: popupMessage, handIndex });
         this.checkHotStreak();
+    }
 
+    // Ends the round once every hand has been settled.
+    finishRound() {
+        this.gamePhase = 'gameOver';
         if (this.lastHandBeforeReshuffle) {
             this.reshuffleShoe();
         }
+        setMessage(this.roundMessages.join(' '));
+        this.updateUI();
+        document.getElementById('next-hand').style.display = 'inline-block';
     }
 
     reshuffleShoe() {
-        setMessage("Reshuffling the deck for the next hand.");
+        this.roundMessages.push("Reshuffling the deck for the next hand.");
         this.deck.reset();
         this.lastHandBeforeReshuffle = false;
         // Animate shoe being reshuffled
@@ -727,11 +809,12 @@ class Game {
         document.getElementById('cards-remaining').textContent = `Cards in shoe: ${this.deck.cardsRemaining()}`;
 
         let dealerCardsEl = document.getElementById('dealer-cards');
+        const holeCardHidden = this.gamePhase === 'playerTurn' || this.gamePhase === 'insurance';
         dealerCardsEl.innerHTML = this.dealer.cards.map((card, index) => 
-            this.gamePhase === 'playerTurn' && index === 1 ? this.createCardElement({value: '?', suit: '?'}) : this.createCardElement(card)
+            holeCardHidden && index === 1 ? this.createCardElement({value: '?', suit: '?'}) : this.createCardElement(card)
         ).join('');
         
-        if (this.gamePhase !== 'playerTurn') {
+        if (!holeCardHidden) {
             document.getElementById('dealer-hand').querySelector('.hand-title').textContent = `Dealer's Hand (Score: ${this.dealer.getScore()})`;
         } else {
             document.getElementById('dealer-hand').querySelector('.hand-title').textContent = "Dealer's Hand";
@@ -741,7 +824,7 @@ class Game {
         if (this.player.hands.length > 0 && this.gamePhase !== 'betting') {
             playerHandsEl.innerHTML = this.player.hands.map((hand, index) => `
                 <div class="hand ${index === this.currentHandIndex && this.gamePhase === 'playerTurn' ? 'active-hand' : ''}">
-                    <div class="hand-title">Hand ${index + 1} (Score: ${hand.getScore()})</div>
+                    <div class="hand-title">Hand ${index + 1} (Score: ${hand.getScore()})${this.handStatusLabel(hand)}</div>
                     <div class="hand-cards">${hand.cards.map(card => this.createCardElement(card)).join('')}</div>
                     <div class="hand-bet">Bet: $${hand.bet}</div>
                 </div>
@@ -752,6 +835,25 @@ class Game {
 
         this.updateActionButtons();
         this.updateChips();
+        this.flushPopups();
+    }
+
+    // Result popups are queued when a hand is settled and shown after the next
+    // render, because updateUI rebuilds the hand elements they attach to.
+    flushPopups() {
+        const popups = this.pendingPopups;
+        this.pendingPopups = [];
+        popups.forEach(({ message, handIndex }) => this.showPopupMessage(message, handIndex));
+    }
+
+    handStatusLabel(hand) {
+        if (!hand.settled) {
+            return '';
+        }
+        if (hand.result === 'loss' && hand.getScore() > 21) {
+            return ' - BUST';
+        }
+        return ` - ${hand.result.toUpperCase()}`;
     }
 
     updateActionButtons() {
@@ -764,6 +866,8 @@ class Game {
         });
         document.getElementById('deal').disabled = this.gamePhase !== 'betting' || this.currentBet === 0;
         document.getElementById('insurance').style.display = this.canInsurance() ? 'inline-block' : 'none';
+        document.getElementById('decline-insurance').style.display = this.canDeclineInsurance() ? 'inline-block' : 'none';
+        document.getElementById('clear-bet').disabled = this.gamePhase !== 'betting';
     }
 
     updateChips() {
@@ -781,43 +885,57 @@ class Game {
     
         const betChips = document.getElementById('bet-chips');
         betChips.innerHTML = this.chipsInPot.map(chip => `
-            <div class="chip chip-${chip}" onclick="game.removeBet(${chip})">
+            <div class="chip chip-${chip}${this.gamePhase === 'betting' ? '' : ' locked'}" onclick="game.removeBet(${chip})">
                 <span class="chip-value">$${chip}</span>
             </div>
         `).join('');
     }
 
-    canHit() {
-        return this.gamePhase === 'playerTurn' && !this.player.hands[this.currentHandIndex].doubledDown;
+    canHit(handIndex = this.currentHandIndex) {
+        const hand = this.player.hands[handIndex];
+        return this.gamePhase === 'playerTurn' && !!hand && !hand.settled && !hand.doubledDown;
     }
 
-    canStand() {
-        return this.gamePhase === 'playerTurn';
+    canStand(handIndex = this.currentHandIndex) {
+        const hand = this.player.hands[handIndex];
+        return this.gamePhase === 'playerTurn' && !!hand && !hand.settled;
     }
 
-    canDouble() {
-        const currentHand = this.player.hands[this.currentHandIndex];
-        return this.gamePhase === 'playerTurn' && 
-               (currentHand.cards.length === 2 || this.allowDoubleAfterSplit) && 
-               this.player.balance >= currentHand.bet;
+    canDouble(handIndex = this.currentHandIndex) {
+        const hand = this.player.hands[handIndex];
+        return this.allowDoubleDown &&
+               this.canStand(handIndex) &&
+               hand.cards.length === 2 &&
+               this.player.balance >= hand.bet;
     }
 
-    canSplit() {
-        const currentHand = this.player.hands[this.currentHandIndex];
-        return this.gamePhase === 'playerTurn' && 
-               currentHand.cards.length === 2 && 
-               (currentHand.cards[0].value === currentHand.cards[1].value ||
-               (isNaN(currentHand.cards[0].value) && isNaN(currentHand.cards[1].value))) && // Allow splitting face cards
-               this.player.balance >= currentHand.bet &&
+    // Single source of truth for splitting: the Split button and the split action
+    // both go through here. Only two cards of the same rank may be split.
+    canSplit(handIndex = this.currentHandIndex) {
+        const hand = this.player.hands[handIndex];
+        return this.allowSplit &&
+               this.canStand(handIndex) &&
+               hand.canSplit() &&
+               this.player.balance >= hand.bet &&
                this.player.hands.length < 4; // Limit to 4 hands (3 splits)
     }
 
-    canSurrender() {
-        return this.allowSurrender && this.gamePhase === 'playerTurn' && this.player.hands[this.currentHandIndex].cards.length === 2;
+    canSurrender(handIndex = this.currentHandIndex) {
+        const hand = this.player.hands[handIndex];
+        return this.allowSurrender &&
+               this.canStand(handIndex) &&
+               hand.cards.length === 2 &&
+               this.player.hands.length === 1; // no surrender after splitting
     }
 
+    // Insurance is a one-time decision made in its own phase, before the dealer's
+    // hole card is checked. Once decided, the phase moves on and it cannot recur.
     canInsurance() {
-        return this.allowInsurance && this.gamePhase === 'playerTurn' && this.dealer.cards[0].value === 'A' && this.player.balance >= this.player.hands[0].bet / 2;
+        return this.gamePhase === 'insurance' && this.player.balance >= this.player.hands[0].bet / 2;
+    }
+
+    canDeclineInsurance() {
+        return this.gamePhase === 'insurance';
     }
 
     createCardElement(card) {
@@ -918,6 +1036,7 @@ document.getElementById('double').addEventListener('click', () => game.doubleDow
 document.getElementById('split').addEventListener('click', () => game.split(game.currentHandIndex));
 document.getElementById('surrender').addEventListener('click', () => game.surrender());
 document.getElementById('insurance').addEventListener('click', () => game.buyInsurance());
+document.getElementById('decline-insurance').addEventListener('click', () => game.declineInsurance());
 document.getElementById('next-hand').addEventListener('click', () => game.prepareNextHand());
 document.getElementById('clear-bet').addEventListener('click', () => game.clearBet());
 document.getElementById('change-theme').addEventListener('click', () => game.changeTheme());
@@ -926,23 +1045,11 @@ document.getElementById('change-theme').addEventListener('click', () => game.cha
 document.addEventListener('keydown', (event) => {
     if (game.gamePhase === 'playerTurn') {
         switch(event.key.toLowerCase()) {
-            case 'h': game.hit(game.currentHandIndex); break;
-            case 's': game.stand(game.currentHandIndex); break;
-            case 'd': 
-                if (!document.getElementById('double').disabled) {
-                    game.doubleDown(game.currentHandIndex);
-                }
-                break;
-            case 'p':
-                if (!document.getElementById('split').disabled) {
-                    game.split(game.currentHandIndex);
-                }
-                break;
-            case 'r':
-                if (!document.getElementById('surrender').disabled) {
-                    game.surrender();
-                }
-                break;
+            case 'h': if (game.canHit()) game.hit(game.currentHandIndex); break;
+            case 's': if (game.canStand()) game.stand(game.currentHandIndex); break;
+            case 'd': if (game.canDouble()) game.doubleDown(game.currentHandIndex); break;
+            case 'p': if (game.canSplit()) game.split(game.currentHandIndex); break;
+            case 'r': if (game.canSurrender()) game.surrender(); break;
         }
     } else if (game.gamePhase === 'betting' && event.key === 'Enter') {
         game.deal();
