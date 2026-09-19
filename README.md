@@ -72,7 +72,7 @@ To play online, use the [Play Now](https://mattgrilli.github.io/blackjack.html) 
 ## How It's Built
 
 - `engine.js` - the rules of blackjack (dealing, splitting, insurance, payouts, basic strategy). It has no browser code, so it can be tested in plain Node. It reports what happens through events.
-- `script.js` - the page: draws the table, plays sounds and animations, writes the messages and keeps the statistics, all in reaction to the engine's events.
+- `script.js` - the page: draws the table, plays sounds and animations, writes the messages and keeps the statistics, all in reaction to the engine's events. Rendering is incremental: cards, hands and chips are keyed, so only what changed is touched and unchanged elements keep their animations and focus.
 - `blackjack.html` and `styles.css` - the markup and styling.
 
 ## Testing
@@ -86,7 +86,6 @@ node blackjack_verify.cjs
 ## Future Improvements
 
 - A protected "vault" balance that can't be bet
-- Update only the parts of the page that change, instead of redrawing the whole table
 - More detailed statistics and an achievement system
 
 ## Contributing

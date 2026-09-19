@@ -520,19 +520,55 @@ test('Engine: fuzz - 5000 random rounds conserve money and always finish', () =>
 // =====================================================================
 
 function makeEnvironment(savedStats = null, { storageThrows = false, presets = {} } = {}) {
+  // A minimal DOM: enough tree operations for the page's keyed rendering, so tests can
+  // check which elements are kept, replaced or removed.
   class Element {
     constructor() {
       this.style = {};
       this.dataset = {};
-      this.classList = { add() {}, remove() {}, toggle() {} };
+      this.attributes = {};
+      this._classes = new Set();
+      this.classList = {
+        add: (...names) => names.forEach(name => this._classes.add(name)),
+        remove: (...names) => names.forEach(name => this._classes.delete(name)),
+        toggle: (name, force) => {
+          const on = force === undefined ? !this._classes.has(name) : force;
+          if (on) this._classes.add(name); else this._classes.delete(name);
+          return on;
+        },
+        contains: name => this._classes.has(name)
+      };
       this.innerHTML = '';
-      this.textContent = '';
+      this._text = '';
       this.children = [];
+      this.parentNode = null;
       this.disabled = false;
     }
-    appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
-    remove() {}
-    setAttribute() {}
+    get className() { return [...this._classes].join(' '); }
+    set className(value) { this._classes = new Set(String(value).split(/\s+/).filter(Boolean)); }
+    get textContent() { return this._text; }
+    set textContent(value) { this._text = String(value); this.children = []; } // like the DOM, drops children
+    get lastChild() { return this.children[this.children.length - 1] || null; }
+    appendChild(child) { child.remove(); this.children.push(child); child.parentNode = this; return child; }
+    replaceChild(next, old) {
+      const index = this.children.indexOf(old);
+      if (index === -1) throw new Error('replaceChild: not a child');
+      next.remove();
+      this.children[this.children.indexOf(old)] = next;
+      next.parentNode = this;
+      old.parentNode = null;
+      return old;
+    }
+    removeChild(child) {
+      const index = this.children.indexOf(child);
+      if (index === -1) throw new Error('removeChild: not a child');
+      this.children.splice(index, 1);
+      child.parentNode = null;
+      return child;
+    }
+    remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+    setAttribute(name, value) { this.attributes[name] = String(value); }
+    getAttribute(name) { return this.attributes[name] ?? null; }
     addEventListener() {}
     querySelector() { return new Element(); }
     querySelectorAll() { return []; }
@@ -579,6 +615,18 @@ function makeEnvironment(savedStats = null, { storageThrows = false, presets = {
   });
   const source = fs.readFileSync(enginePath, 'utf8') + '\n' + fs.readFileSync(scriptPath, 'utf8');
   vm.runInContext(source + '\n;globalThis.pageExports = { game, getStats: () => ({...gameStats}), getSession: () => ({...sessionStats}), toggleMute, isMuted: () => soundMuted, describeCard };', context, { filename: 'engine.js+script.js' });
+  // Runs timers that are due within the next `ms` milliseconds (and any they schedule).
+  function advance(ms) {
+    const until = now + ms;
+    for (;;) {
+      timers.sort((a, b) => a.time - b.time || a.id - b.id);
+      if (!timers.length || timers[0].time > until) break;
+      const timer = timers.shift();
+      now = timer.time;
+      timer.fn();
+    }
+    now = until;
+  }
   function flushTimers() {
     let count = 0;
     while (timers.length) {
@@ -589,7 +637,7 @@ function makeEnvironment(savedStats = null, { storageThrows = false, presets = {
       timer.fn();
     }
   }
-  return { ...context.pageExports, node, flushTimers, playLog, storage };
+  return { ...context.pageExports, node, flushTimers, advance, playLog, storage };
 }
 
 function uiDeal(env, values, bet = 100) {
@@ -786,7 +834,133 @@ test('Page: cards have screen-reader descriptions', () => {
   const env = makeEnvironment();
   assert.equal(env.describeCard({ value: 'Q', suit: '♥' }), 'Queen of hearts');
   assert.equal(env.describeCard({ value: '10', suit: '♠' }), '10 of spades');
-  assert.match(env.game.createCardElement({ value: 'A', suit: '♣' }), /aria-label="Ace of clubs"/);
+  const element = env.game.buildCardElement({ value: 'A', suit: '♣' });
+  assert.equal(element.getAttribute('aria-label'), 'Ace of clubs');
+  assert.equal(element.getAttribute('role'), 'img');
+  assert.equal(env.game.buildCardElement({ value: 'A', suit: '♣' }, { hidden: true }).getAttribute('aria-label'), null);
+});
+
+const cardElements = env => env.node('player-hands').children.map(hand => hand.parts.cards.children);
+const dealerElements = env => env.node('dealer-cards').children;
+
+test('Page: the opening cards are revealed one at a time', () => {
+  const env = makeEnvironment();
+  stack(env.game.engine, ['10', '9', '8', '7']);
+  env.game.placeBet(100);
+  env.game.deal();
+  assert.equal(env.node('game-container').dataset.phase, 'dealing');
+  assert.equal(env.node('player-hands').children.length, 1); // the hand exists, still empty
+  assert.equal(cardElements(env)[0].length, 0);
+  assert.equal(dealerElements(env).length, 0);
+  env.advance(0);
+  assert.deepEqual([cardElements(env)[0].length, dealerElements(env).length], [1, 0]);
+  env.advance(500);
+  assert.deepEqual([cardElements(env)[0].length, dealerElements(env).length], [1, 1]);
+  env.advance(500);
+  assert.deepEqual([cardElements(env)[0].length, dealerElements(env).length], [2, 1]);
+  env.advance(500);
+  assert.deepEqual([cardElements(env)[0].length, dealerElements(env).length], [2, 2]);
+  assert.equal(env.game.engine.gamePhase, 'dealing');
+  env.advance(500);
+  assert.equal(env.game.engine.gamePhase, 'playerTurn');
+});
+
+test('Page: the dealer\'s hole card stays face down until the dealer plays', () => {
+  const env = makeEnvironment();
+  uiDeal(env, ['10', '10', '9', '6', '5']);
+  assert.equal(dealerElements(env)[1].classList.contains('card-back'), true);
+  assert.equal(dealerElements(env)[1].getAttribute('aria-label'), null);
+  const upCard = dealerElements(env)[0];
+  env.game.stand(0);
+  env.flushTimers();
+  assert.equal(dealerElements(env)[0], upCard); // the up card element was never rebuilt
+  assert.equal(dealerElements(env)[1].classList.contains('card-back'), false);
+  assert.match(dealerElements(env)[1].getAttribute('aria-label'), /^6 of /);
+  assert.equal(dealerElements(env).length, env.game.engine.dealer.cards.length);
+});
+
+test('Page: cards that have not changed keep the same element when the table updates', () => {
+  const env = makeEnvironment();
+  uiDeal(env, ['2', '10', '3', '7', '4', '5']);
+  const before = [...cardElements(env)[0]];
+  assert.equal(before.length, 2);
+  env.game.hit(0); // 2+3+4 = 9
+  const after = cardElements(env)[0];
+  assert.equal(after.length, 3);
+  assert.equal(after[0], before[0]);
+  assert.equal(after[1], before[1]);
+  assert.equal(after[2].classList.contains('deal-in'), true); // the new card animates in
+  env.game.hit(0);
+  assert.equal(cardElements(env)[0][0], before[0]);
+  assert.equal(cardElements(env)[0][2], after[2]);
+});
+
+test('Page: a newly turned-over card is replaced without the fly-in animation', () => {
+  const env = makeEnvironment();
+  uiDeal(env, ['10', '10', '9', '6', '5']);
+  const hole = dealerElements(env)[1];
+  env.game.stand(0);
+  env.flushTimers();
+  const revealed = dealerElements(env)[1];
+  assert.notEqual(revealed, hole);
+  assert.equal(revealed.classList.contains('deal-in'), false);
+});
+
+test('Page: hand elements persist and are updated, not rebuilt', () => {
+  const env = makeEnvironment();
+  uiDeal(env, ['8', '10', '8', '7', '10', '9', 'K']);
+  const hand = env.node('player-hands').children[0];
+  assert.equal(hand.parts.title.textContent, 'Hand 1 (Score: 16)');
+  assert.equal(hand.classList.contains('active-hand'), true);
+  env.game.split(0);
+  assert.equal(env.node('player-hands').children.length, 2);
+  assert.equal(env.node('player-hands').children[0], hand); // same element, new contents
+  assert.equal(hand.parts.title.textContent, 'Hand 1 (Score: 18)');
+  env.game.hit(0); // bust
+  assert.equal(hand.parts.status.textContent, 'BUST');
+  assert.equal(hand.classList.contains('active-hand'), false);
+  assert.equal(env.node('player-hands').children[1].classList.contains('active-hand'), true);
+  env.game.stand(1);
+  env.flushTimers();
+  assert.equal(env.node('player-hands').children[0], hand);
+  assert.equal(env.node('player-hands').children[1].parts.status.textContent, 'PUSH');
+});
+
+test('Page: the table is cleared for the next round', () => {
+  const env = makeEnvironment();
+  uiDeal(env, ['10', '10', 'K', '8']);
+  env.game.stand(0);
+  env.flushTimers();
+  assert.equal(dealerElements(env).length, 2);
+  env.game.prepareNextHand();
+  assert.equal(dealerElements(env).length, 0);
+  assert.equal(env.node('player-hands').children.length, 0);
+  assert.equal(env.node('bet-chips').children.length, 0);
+});
+
+test('Page: chips in the pot match the bet, and untouched rack chips are kept', () => {
+  const env = makeEnvironment();
+  const rack = env.node('chip-container').children;
+  assert.equal(rack.length, 6);
+  const dollar = rack[0];
+  env.game.placeBet(25);
+  env.game.placeBet(100);
+  assert.deepEqual(env.node('bet-chips').children.map(chip => chip.dataset.key.split(':')[1]), ['25', '100']);
+  assert.equal(env.node('chip-container').children[0], dollar); // the $1 chip was never rebuilt
+  assert.equal(env.node('bet-chips').children[1].getAttribute('aria-label'), 'Remove a $100 chip from your bet');
+  env.node('bet-chips').children[0].onclick(); // clicking a chip in the pot removes it
+  assert.deepEqual(env.node('bet-chips').children.map(chip => chip.dataset.key.split(':')[1]), ['100']);
+  assert.equal(env.game.engine.currentBet, 100);
+  env.game.setBet(137);
+  assert.equal(env.node('bet-chips').children.length, env.game.engine.chipsInPot.length);
+});
+
+test('Page: chips you cannot afford are locked in the rack', () => {
+  const env = makeEnvironment();
+  env.game.setBet(950);
+  const locked = env.node('chip-container').children.filter(chip => chip.classList.contains('locked'));
+  assert.deepEqual(locked.map(chip => chip.dataset.key.split(':')[0]), ['100', '500', '1000']);
+  assert.equal(locked[0].tabIndex, -1);
 });
 
 test('Page: fuzz - 300 random rounds through the page keep balance and statistics in step', () => {
@@ -794,6 +968,14 @@ test('Page: fuzz - 300 random rounds through the page keep balance and statistic
   const g = env.game;
   const e = g.engine;
   let adjust = 0;
+  // The page must always show exactly what the engine holds.
+  function checkRendered() {
+    assert.equal(dealerElements(env).length, e.dealer.cards.length, 'dealer cards on screen');
+    const handEls = env.node('player-hands').children;
+    assert.equal(handEls.length, e.gamePhase === 'betting' ? 0 : e.player.hands.length, 'hands on screen');
+    handEls.forEach((el, i) => assert.equal(el.parts.cards.children.length, e.player.hands[i].cards.length, `cards in hand ${i}`));
+    assert.equal(env.node('bet-chips').children.length, e.chipsInPot.length, 'chips in the pot');
+  }
   for (let round = 0; round < 300; round++) {
     if (e.player.balance < 20) { e.player.balance += 1000; adjust += 1000; }
     const affordable = [5, 25, 100].filter(chip => chip <= e.player.balance);
@@ -813,8 +995,10 @@ test('Page: fuzz - 300 random rounds through the page keep balance and statistic
         else g.stand(e.currentHandIndex);
       }
       env.flushTimers();
+      checkRendered();
     }
     assert.equal(e.gamePhase, 'gameOver', `round ${round} never finished`);
+    checkRendered();
     assert.equal(e.player.balance, 1000 + adjust + env.getSession().totalMoney, `round ${round}: page statistics disagree with the balance`);
     g.prepareNextHand();
   }

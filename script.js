@@ -104,6 +104,41 @@ function describeCard(card) {
     return `${RANK_NAMES[card.value] || card.value} of ${SUIT_NAMES[card.suit] || card.suit}`;
 }
 
+function setText(element, text) {
+    if (element.textContent !== text) {
+        element.textContent = text;
+    }
+}
+
+// Reconciles a container's children with a list of items, so the page only touches what
+// changed. A child whose key is unchanged is kept as it is (its animation, hover state
+// and keyboard focus survive), a changed one is replaced, and any extras are removed.
+// createElementFor(item, index, isNew) builds a child (isNew is true when the item is
+// past the end of what was there before, i.e. a genuinely new item); updateElement, if
+// given, then brings every child, new or kept, up to date.
+function syncChildren(container, items, keyOf, createElementFor, updateElement) {
+    items.forEach((item, index) => {
+        const key = keyOf(item, index);
+        const existing = container.children[index];
+        let element = existing;
+        if (!existing || existing.dataset.key !== key) {
+            element = createElementFor(item, index, !existing);
+            element.dataset.key = key;
+            if (existing) {
+                container.replaceChild(element, existing);
+            } else {
+                container.appendChild(element);
+            }
+        }
+        if (updateElement) {
+            updateElement(element, item, index);
+        }
+    });
+    while (container.children.length > items.length) {
+        container.removeChild(container.lastChild);
+    }
+}
+
 const BET_FAILURES = {
     locked: 'Bets are locked once dealing begins.',
     insufficient: 'Insufficient funds for this bet.',
@@ -119,8 +154,8 @@ class Table {
         this.themes = ['theme1', 'theme2', 'theme3'];
         this.currentTheme = 0;
         this.roundMessages = [];   // result messages collected over the current round
-        this.pendingPopups = [];   // per-hand result popups waiting for the next render
         this.cutCardPending = false;
+        this.revealed = { player: 0, dealer: 0 }; // opening cards shown so far while dealing
         this.lastOpening = null;   // result of the dealer's most recent blackjack check
         engine.subscribe(event => this.handleEvent(event));
         this.updateChips();
@@ -141,7 +176,11 @@ class Table {
                 }
                 break;
             case 'cutCard':
-                this.cutCardPending = true;
+                if (this.engine.gamePhase === 'dealing') {
+                    this.cutCardPending = true; // shown once the opening cards are revealed
+                } else {
+                    this.showCutCard();
+                }
                 break;
             case 'openingChecked':
                 this.lastOpening = event;
@@ -231,7 +270,7 @@ class Table {
         recordStats({ net, hands: 1, won: (outcome === 'win' || outcome === 'blackjack') ? 1 : 0 });
         this.roundMessages.push(message);
         setMessage(this.roundMessages.join(' '));
-        this.pendingPopups.push({ message: popup, handIndex });
+        this.showPopupMessage(popup, handIndex);
     }
 
     // Tells the player what is expected of them once the opening blackjack check is done.
@@ -324,20 +363,17 @@ class Table {
             return;
         }
         this.roundMessages = [];
-        this.pendingPopups = [];
         this.lastOpening = null;
+        this.revealed = { player: 0, dealer: 0 };
         this.updateUI();
-
-        // Clear existing cards
-        document.querySelector('.hand-cards').innerHTML = '';
-        document.getElementById('dealer-cards').innerHTML = '';
 
         // The engine deals all four cards at once; the page reveals them half a second apart.
         const sequence = this.engine.dealInitialCards();
         sequence.forEach((deal, index) => {
             setTimeout(() => {
                 playSound(cardSound);
-                this.animateDealCard(deal.target, deal.card, deal.faceUp);
+                this.revealed[deal.target] += 1;
+                this.updateUI();
 
                 if (index === sequence.length - 1) {
                     setTimeout(() => {
@@ -345,6 +381,10 @@ class Table {
                         this.engine.beginPlay();
                         this.updateUI();
                         this.announceTurn();
+                        if (this.cutCardPending) {
+                            this.cutCardPending = false;
+                            this.showCutCard();
+                        }
                     }, 500);
                 }
             }, index * 500);
@@ -399,7 +439,6 @@ class Table {
         }
     }
 
-    // Plays the dealer's hand at a watchable pace: reveal the hole card, then one card a second.
     runDealerTurn() {
         this.updateUI();
         this.updateShoeDisplay();
@@ -407,9 +446,8 @@ class Table {
         const step = () => {
             if (this.engine.dealerShouldDraw()) {
                 setTimeout(() => {
-                    const card = this.engine.dealerDraw();
-                    this.animateDealCard('dealer', card, true);
-                    this.updateUI();
+                    this.engine.dealerDraw();
+                    this.updateUI(); // the new card animates in
                     step();
                 }, 1000);
             } else {
@@ -452,43 +490,15 @@ class Table {
         const cutCard = document.createElement('div');
         cutCard.className = 'cut-card';
         cutCard.textContent = 'RESHUFFLE';
-        document.getElementById('dealer-cards').appendChild(cutCard);
-        
+        document.getElementById('dealer-hand').appendChild(cutCard);
+
         setTimeout(() => {
-            cutCard.style.transform = 'translateY(-100%)';
+            cutCard.style.transform = 'translateX(-50%) translateY(-100%)';
         }, 100);
 
         setTimeout(() => {
             cutCard.remove();
         }, 3000);
-    }
-
-    animateDealCard(target, card, faceUp) {
-        const handElement = target === 'dealer' ? document.getElementById('dealer-cards') : document.querySelector('.hand-cards');
-        const cardElement = document.createElement('div');
-        cardElement.className = `card ${faceUp ? '' : 'card-back'}`;
-        cardElement.style.opacity = '0';
-        cardElement.style.transform = 'translateY(-100px) translateX(-100px) rotate(-90deg)';
-        
-        if (faceUp) {
-            cardElement.setAttribute('role', 'img');
-            cardElement.setAttribute('aria-label', describeCard(card));
-            cardElement.innerHTML = this.createCardInnerHTML(card);
-            cardElement.classList.add(card.suit === '♥' || card.suit === '♦' ? 'red' : 'black');
-        } else {
-            cardElement.style.backgroundColor = '#0063B3';
-            cardElement.style.backgroundImage = `repeating-linear-gradient(45deg, #0063B3, #0063B3 5px, #004C8C 5px, #004C8C 10px)`;
-        }
-
-        handElement.appendChild(cardElement);
-
-        // Trigger reflow
-        void cardElement.offsetWidth;
-
-        // Apply the animation
-        cardElement.style.transition = 'all 0.5s ease-out';
-        cardElement.style.opacity = '1';
-        cardElement.style.transform = 'translateY(0) translateX(0) rotate(0)';
     }
 
     createCardInnerHTML(card) {
@@ -598,63 +608,106 @@ class Table {
     }
 
     updateUI() {
+        const engine = this.engine;
         // The phase drives which parts of the table are shown (betting circle vs hands,
         // and which control-dock panel); see the [data-phase] rules in styles.css.
-        document.getElementById('game-container').dataset.phase = this.engine.gamePhase;
+        document.getElementById('game-container').dataset.phase = engine.gamePhase;
         document.getElementById('bet-label').textContent =
-            this.engine.currentBet > 0 ? `Bet: $${this.engine.currentBet}` : 'Place your bet';
-        document.getElementById('balance').textContent = `Balance: $${this.engine.player.balance}`;
-        document.getElementById('bet').textContent = `Current Bet: $${this.engine.currentBet}`;
-        document.getElementById('cards-remaining').textContent = `Cards in shoe: ${this.engine.deck.cardsRemaining()}`;
+            engine.currentBet > 0 ? `Bet: $${engine.currentBet}` : 'Place your bet';
+        document.getElementById('balance').textContent = `Balance: $${engine.player.balance}`;
+        document.getElementById('bet').textContent = `Current Bet: $${engine.currentBet}`;
+        document.getElementById('cards-remaining').textContent = `Cards in shoe: ${engine.deck.cardsRemaining()}`;
 
-        let dealerCardsEl = document.getElementById('dealer-cards');
-        // While dealing, the engine already holds all four opening cards, but they are
-        // revealed one at a time by animateDealCard, so render the hands empty for now.
-        const dealing = this.engine.gamePhase === 'dealing';
-        const holeCardHidden = this.engine.gamePhase === 'playerTurn' || this.engine.gamePhase === 'insurance';
-        dealerCardsEl.innerHTML = (dealing ? [] : this.engine.dealer.cards).map((card, index) => 
-            holeCardHidden && index === 1 ? this.createCardElement({value: '?', suit: '?'}) : this.createCardElement(card)
-        ).join('');
-        this.fitCards(dealerCardsEl, dealerCardsEl.clientWidth);
-        
-        if (!holeCardHidden) {
-            document.getElementById('dealer-hand').querySelector('.hand-title').textContent = `Dealer's Hand (Score: ${dealing ? 0 : this.engine.dealer.getScore()})`;
-        } else {
-            document.getElementById('dealer-hand').querySelector('.hand-title').textContent = "Dealer's Hand";
-        }
-
-        let playerHandsEl = document.getElementById('player-hands');
-        if (this.engine.player.hands.length > 0 && this.engine.gamePhase !== 'betting') {
-            playerHandsEl.innerHTML = this.engine.player.hands.map((hand, index) => `
-                <div class="hand ${index === this.engine.currentHandIndex && this.engine.gamePhase === 'playerTurn' ? 'active-hand' : ''}">
-                    <div class="hand-title">Hand ${index + 1} (Score: ${dealing ? 0 : hand.getScore()})</div>
-                    <div class="hand-cards">${(dealing ? [] : hand.cards).map(card => this.createCardElement(card)).join('')}</div>
-                    <div class="hand-bet">Bet: $${hand.bet}</div>
-                    <div class="hand-status">${this.handStatusLabel(hand)}</div>
-                </div>
-            `).join('');
-            // Each hand gets an equal share of the row, less its margin and padding.
-            const widthPerHand = playerHandsEl.clientWidth / this.engine.player.hands.length - 40;
-            playerHandsEl.querySelectorAll('.hand-cards').forEach(row => this.fitCards(row, widthPerHand));
-        } else {
-            playerHandsEl.innerHTML = ''; // Clear the player hands area if no hands or in betting phase
-        }
-
+        this.renderDealer();
+        this.renderHands();
         this.updateActionButtons();
         this.updateChips();
-        this.flushPopups();
-        if (this.cutCardPending && !dealing) {
-            this.cutCardPending = false;
-            this.showCutCard(); // after the render, which would otherwise wipe it
-        }
     }
 
-    // Result popups are queued when a hand is settled and shown after the next
-    // render, because updateUI rebuilds the hand elements they attach to.
-    flushPopups() {
-        const popups = this.pendingPopups;
-        this.pendingPopups = [];
-        popups.forEach(({ message, handIndex }) => this.showPopupMessage(message, handIndex));
+    // While dealing, the engine already holds all four opening cards, but the page
+    // reveals them one at a time, so only the first few are shown.
+    visibleCards(hand, who) {
+        return this.engine.gamePhase === 'dealing' ? hand.cards.slice(0, this.revealed[who]) : hand.cards;
+    }
+
+    scoreOf(cards) {
+        const shown = new Hand();
+        shown.cards = cards;
+        return shown.getScore();
+    }
+
+    renderDealer() {
+        const engine = this.engine;
+        const phase = engine.gamePhase;
+        const holeCardHidden = phase === 'dealing' || phase === 'insurance' || phase === 'playerTurn';
+        const cards = this.visibleCards(engine.dealer, 'dealer');
+        const row = document.getElementById('dealer-cards');
+        this.renderCardRow(row, cards, holeCardHidden ? 1 : -1, row.clientWidth);
+
+        const title = document.getElementById('dealer-hand').querySelector('.hand-title');
+        setText(title, (holeCardHidden || cards.length === 0)
+            ? "Dealer's Hand"
+            : `Dealer's Hand (Score: ${this.scoreOf(cards)})`);
+    }
+
+    renderHands() {
+        const engine = this.engine;
+        const container = document.getElementById('player-hands');
+        const hands = engine.gamePhase === 'betting' ? [] : engine.player.hands;
+        // Each hand gets an equal share of the row, less its margin and padding.
+        const widthPerHand = container.clientWidth / Math.max(hands.length, 1) - 40;
+        syncChildren(container, hands,
+            (hand, index) => `hand-${index}`,
+            () => this.buildHandElement(),
+            (element, hand, index) => this.updateHandElement(element, hand, index, widthPerHand));
+    }
+
+    buildHandElement() {
+        const element = document.createElement('div');
+        element.className = 'hand';
+        const parts = {};
+        for (const name of ['title', 'cards', 'bet', 'status']) {
+            parts[name] = document.createElement('div');
+            parts[name].className = name === 'cards' ? 'hand-cards' : `hand-${name}`;
+            element.appendChild(parts[name]);
+        }
+        element.parts = parts;
+        return element;
+    }
+
+    updateHandElement(element, hand, index, widthPerHand) {
+        const engine = this.engine;
+        const cards = this.visibleCards(hand, 'player');
+        setText(element.parts.title, `Hand ${index + 1} (Score: ${this.scoreOf(cards)})`);
+        element.classList.toggle('active-hand', index === engine.currentHandIndex && engine.gamePhase === 'playerTurn');
+        this.renderCardRow(element.parts.cards, cards, -1, widthPerHand);
+        setText(element.parts.bet, `Bet: $${hand.bet}`);
+        setText(element.parts.status, this.handStatusLabel(hand));
+    }
+
+    // Shows a row of cards, keeping the elements of cards that haven't changed. A card
+    // that is genuinely new animates in; one that merely turns face up does not.
+    renderCardRow(rowEl, cards, hiddenIndex, availableWidth) {
+        syncChildren(rowEl, cards,
+            (card, index) => `${index}:${card.value}${card.suit}:${index === hiddenIndex ? 'back' : 'face'}`,
+            (card, index, isNew) => this.buildCardElement(card, { hidden: index === hiddenIndex, animate: isNew }));
+        this.fitCards(rowEl, availableWidth);
+    }
+
+    buildCardElement(card, { hidden = false, animate = false } = {}) {
+        const element = document.createElement('div');
+        if (hidden) {
+            element.className = 'card card-back';
+        } else {
+            element.className = `card ${card.suit === '♥' || card.suit === '♦' ? 'red' : 'black'}`;
+            element.setAttribute('role', 'img');
+            element.setAttribute('aria-label', describeCard(card));
+            element.innerHTML = this.createCardInnerHTML(card);
+        }
+        if (animate) {
+            element.classList.add('deal-in');
+        }
+        return element;
     }
 
     handStatusLabel(hand) {
@@ -667,10 +720,11 @@ class Table {
         return hand.result.toUpperCase();
     }
 
-    // Keeps a row of cards on one line: when the cards would be wider than the space
-    // available, each card after the first overlaps the previous one just enough to fit.
     fitCards(rowEl, availableWidth) {
-        const cards = rowEl.querySelectorAll('.card');
+        const cards = Array.from(rowEl.children);
+        cards.forEach(card => {
+            card.style.marginLeft = ''; // undo any overlap from an earlier render
+        });
         if (cards.length < 2) {
             return;
         }
@@ -708,71 +762,37 @@ class Table {
     }
 
     updateChips() {
-        const chipContainer = document.getElementById('chip-container');
-        const rackState = this.engine.chips
-            .map(chipValue => `${chipValue}:${this.engine.gamePhase === 'betting' && chipValue <= this.engine.player.balance ? 1 : 0}`)
-            .join(',');
-        // Only rebuild the rack when something changed, so keyboard focus isn't lost on every click.
-        if (chipContainer.dataset.rackState !== rackState) {
-            chipContainer.dataset.rackState = rackState;
-            chipContainer.innerHTML = '';
-            this.engine.chips.forEach(chipValue => {
-                const chip = document.createElement('div');
-                const usable = this.engine.gamePhase === 'betting' && chipValue <= this.engine.player.balance;
-                chip.className = `chip chip-${chipValue}${usable ? '' : ' locked'}`;
-                chip.setAttribute('role', 'button');
-                chip.setAttribute('aria-label', `Add a $${chipValue} chip to your bet`);
-                chip.tabIndex = usable ? 0 : -1;
-                chip.innerHTML = `
-                    <span class="chip-value">$${chipValue}</span>
-                `;
-                chip.onclick = () => this.placeBet(chipValue);
-                chip.onkeydown = event => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        this.placeBet(chipValue);
-                    }
-                };
-                chipContainer.appendChild(chip);
-            });
-        }
-    
-        const betChips = document.getElementById('bet-chips');
-        betChips.innerHTML = this.engine.chipsInPot.map(chip => `
-            <div class="chip chip-${chip}${this.engine.gamePhase === 'betting' ? '' : ' locked'}" role="button" tabindex="0" aria-label="Remove a $${chip} chip from your bet" onclick="game.removeBet(${chip})" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); game.removeBet(${chip}); }">
-                <span class="chip-value">$${chip}</span>
-            </div>
-        `).join('');
+        const engine = this.engine;
+        const betting = engine.gamePhase === 'betting';
+        // The chip rack: only chips whose state changed are rebuilt, so keyboard focus isn't lost.
+        syncChildren(document.getElementById('chip-container'), engine.chips,
+            chip => `${chip}:${betting && chip <= engine.player.balance ? 1 : 0}`,
+            chip => this.buildChipElement(chip, betting && chip <= engine.player.balance, false));
+        // The chips in the betting circle.
+        syncChildren(document.getElementById('bet-chips'), engine.chipsInPot,
+            (chip, index) => `${index}:${chip}:${betting ? 1 : 0}`,
+            chip => this.buildChipElement(chip, betting, true));
     }
 
-    createCardElement(card) {
-        const suitSymbols = {
-            '♠': '&spades;',
-            '♥': '&hearts;',
-            '♦': '&diams;',
-            '♣': '&clubs;'
+    buildChipElement(value, usable, inPot) {
+        const chip = document.createElement('div');
+        chip.className = `chip chip-${value}${usable ? '' : ' locked'}`;
+        chip.setAttribute('role', 'button');
+        chip.setAttribute('aria-label', inPot ? `Remove a $${value} chip from your bet` : `Add a $${value} chip to your bet`);
+        chip.tabIndex = usable ? 0 : -1;
+        const label = document.createElement('span');
+        label.className = 'chip-value';
+        label.textContent = `$${value}`;
+        chip.appendChild(label);
+        const act = () => (inPot ? this.removeBet(value) : this.placeBet(value));
+        chip.onclick = act;
+        chip.onkeydown = event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                act();
+            }
         };
-        
-        let color = (card.suit === '♥' || card.suit === '♦') ? 'red' : 'black';
-        let symbol = suitSymbols[card.suit] || card.suit;
-        
-        if (card.value === '?') {
-            return `<div class="card card-back"></div>`;
-        }
-        
-        return `
-            <div class="card ${color}" role="img" aria-label="${describeCard(card)}">
-                <div class="card-corner top-left">
-                    <div class="card-value">${card.value}</div>
-                    <div class="card-suit">${symbol}</div>
-                </div>
-                <div class="card-center-suit">${symbol}</div>
-                <div class="card-corner bottom-right">
-                    <div class="card-value">${card.value}</div>
-                    <div class="card-suit">${symbol}</div>
-                </div>
-            </div>
-        `;
+        return chip;
     }
 
     animateChip(amount) {
@@ -805,7 +825,6 @@ class Table {
 
         setTimeout(() => {
             clone.remove();
-            this.updateChips();
         }, animationDuration);
     }
 

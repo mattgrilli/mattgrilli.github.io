@@ -351,6 +351,26 @@ h1 {
 
 
 
+/* A card that has just been dealt flies in from the shoe */
+@keyframes dealIn {
+    from {
+        opacity: 0;
+        transform: translate(-100px, -100px) rotate(-90deg);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.card.deal-in {
+    animation: dealIn 0.5s ease-out;
+}
+
+#dealer-hand {
+    position: relative; /* the cut card is positioned against the dealer's area */
+}
+
 .card:hover {
     transform: translateY(-5px);
 }
