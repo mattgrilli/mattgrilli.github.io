@@ -775,9 +775,29 @@ button.enabled:hover {
     margin-bottom: 6px;
 }
 
-#change-theme {
+#top-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+#change-theme, #mute {
     padding: 6px 12px;
     font-size: 13px;
+}
+
+#hint {
+    background-color: #5b9bd5;
+    color: white;
+}
+
+#hint:disabled {
+    background-color: #cccccc;
+    color: #000;
+}
+
+.chip:focus-visible, button:focus-visible, #bet-amount:focus-visible {
+    outline: 3px solid #ffffff;
+    outline-offset: 2px;
 }
 
 #deal {

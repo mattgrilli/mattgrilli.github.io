@@ -11,20 +11,64 @@ const loseSound = new Audio('sounds/lose.mp3');
 const drawSound = new Audio('sounds/draw.wav');
 const clickSound = new Audio('sounds/click.wav');
 
+const blackjackSound = new Audio('sounds/blackjack.mp3');
+
+// localStorage can be unavailable (private windows, blocked site data), so every
+// access goes through these and the game keeps working without persistence.
+function readStorage(key) {
+    try {
+        return localStorage.getItem(key);
+    } catch (error) {
+        return null;
+    }
+}
+
+function writeStorage(key, value) {
+    try {
+        localStorage.setItem(key, value);
+    } catch (error) {
+        // Not persisting is fine.
+    }
+}
+
+let soundMuted = readStorage('blackjackMuted') === '1';
+
+function updateMuteButton() {
+    document.getElementById('mute').textContent = soundMuted ? 'Sound: Off' : 'Sound: On';
+}
+
+function toggleMute() {
+    soundMuted = !soundMuted;
+    writeStorage('blackjackMuted', soundMuted ? '1' : '0');
+    updateMuteButton();
+}
+
 // Function to play sound
 function playSound(sound) {
+    if (soundMuted) {
+        return;
+    }
     sound.currentTime = 0;
-    sound.play();
+    const playing = sound.play();
+    if (playing && playing.catch) {
+        playing.catch(() => {}); // browsers block audio until the first click; ignore that
+    }
 }
 
 // Save and load statistics
 function saveStats() {
-    localStorage.setItem('blackjackStats', JSON.stringify(gameStats));
+    writeStorage('blackjackStats', JSON.stringify(gameStats));
 }
 
 function loadStats() {
-    const stats = localStorage.getItem('blackjackStats');
-    return stats ? JSON.parse(stats) : { gamesPlayed: 0, gamesWon: 0, totalMoney: 0 };
+    const fresh = { gamesPlayed: 0, gamesWon: 0, totalMoney: 0 };
+    try {
+        const saved = JSON.parse(readStorage('blackjackStats'));
+        const valid = saved && ['gamesPlayed', 'gamesWon', 'totalMoney'].every(key => Number.isFinite(saved[key]));
+        return valid ? { gamesPlayed: saved.gamesPlayed, gamesWon: saved.gamesWon, totalMoney: saved.totalMoney } : fresh;
+    } catch (error) {
+        return fresh; // missing or corrupt data
+    }
 }
 
 function formatMoney(amount) {
@@ -56,6 +100,92 @@ function recordStats({ net = 0, hands = 0, won = 0 }) {
 }
 
 updateStatsDisplay();
+
+const FACE_VALUES = ['K', 'Q', 'J'];
+const RANK_NAMES = { A: 'Ace', K: 'King', Q: 'Queen', J: 'Jack' };
+const SUIT_NAMES = { '♠': 'spades', '♥': 'hearts', '♦': 'diamonds', '♣': 'clubs' };
+
+function cardPoints(value) {
+    if (value === 'A') {
+        return 11;
+    }
+    return FACE_VALUES.includes(value) ? 10 : parseInt(value, 10);
+}
+
+// Screen-reader description, e.g. "Queen of hearts".
+function describeCard(card) {
+    return `${RANK_NAMES[card.value] || card.value} of ${SUIT_NAMES[card.suit] || card.suit}`;
+}
+
+// Basic strategy for a multi-deck shoe where the dealer stands on all 17s,
+// doubling after a split is allowed, and late surrender is available.
+// Returns 'hit' | 'stand' | 'double' | 'split' | 'surrender', falling back to the
+// next best play when an action isn't currently allowed.
+function getBasicStrategyAction(cards, dealerUpValue, { canDouble = true, canSplit = true, canSurrender = true } = {}) {
+    const up = cardPoints(dealerUpValue);
+    const between = (low, high) => up >= low && up <= high;
+
+    const hardTotal = cards.reduce((sum, card) => sum + (card.value === 'A' ? 1 : cardPoints(card.value)), 0);
+    const soft = cards.some(card => card.value === 'A') && hardTotal + 10 <= 21;
+    const total = soft ? hardTotal + 10 : hardTotal;
+    const isPair = cards.length === 2 && cards[0].value === cards[1].value;
+
+    if (isPair && canSplit) {
+        const rank = cardPoints(cards[0].value);
+        const splitAgainst = {
+            11: () => true,
+            8: () => true,
+            9: () => between(2, 6) || up === 8 || up === 9,
+            7: () => between(2, 7),
+            6: () => between(2, 6),
+            4: () => between(5, 6),
+            3: () => between(2, 7),
+            2: () => between(2, 7)
+        };
+        if (splitAgainst[rank] && splitAgainst[rank]()) {
+            return 'split';
+        }
+    }
+
+    if (canSurrender && cards.length === 2 && !soft &&
+        ((total === 16 && (up === 9 || up === 10 || up === 11)) || (total === 15 && up === 10))) {
+        return 'surrender';
+    }
+
+    if (soft) {
+        if (total >= 19) {
+            return 'stand';
+        }
+        if (total === 18) {
+            if (between(3, 6)) {
+                return canDouble ? 'double' : 'stand';
+            }
+            return (up === 9 || up === 10 || up === 11) ? 'hit' : 'stand';
+        }
+        const doubleFrom = total <= 14 ? 5 : total <= 16 ? 4 : 3; // soft 13-14, 15-16, 17
+        return (between(doubleFrom, 6) && canDouble) ? 'double' : 'hit';
+    }
+
+    if (total >= 17) {
+        return 'stand';
+    }
+    if (total >= 13) {
+        return between(2, 6) ? 'stand' : 'hit';
+    }
+    if (total === 12) {
+        return between(4, 6) ? 'stand' : 'hit';
+    }
+    if (total === 11) {
+        return (between(2, 10) && canDouble) ? 'double' : 'hit';
+    }
+    if (total === 10) {
+        return (between(2, 9) && canDouble) ? 'double' : 'hit';
+    }
+    if (total === 9) {
+        return (between(3, 6) && canDouble) ? 'double' : 'hit';
+    }
+    return 'hit';
+}
 
 class Deck {
     constructor(numDecks = 6) {
@@ -437,6 +567,8 @@ class Game {
         cardElement.style.transform = 'translateY(-100px) translateX(-100px) rotate(-90deg)';
         
         if (faceUp) {
+            cardElement.setAttribute('role', 'img');
+            cardElement.setAttribute('aria-label', describeCard(card));
             cardElement.innerHTML = this.createCardInnerHTML(card);
             cardElement.classList.add(card.suit === '♥' || card.suit === '♦' ? 'red' : 'black');
         } else {
@@ -453,8 +585,6 @@ class Game {
         cardElement.style.transition = 'all 0.5s ease-out';
         cardElement.style.opacity = '1';
         cardElement.style.transform = 'translateY(0) translateX(0) rotate(0)';
-
-        playSound(cardSound);
     }
 
     createCardInnerHTML(card) {
@@ -716,9 +846,7 @@ class Game {
         popup.textContent = message;
         document.body.appendChild(popup);
 
-        // Play a special sound for Blackjack
-        const blackjackSound = new Audio('sounds/blackjack.mp3');
-        blackjackSound.play();
+        playSound(blackjackSound);
 
         setTimeout(() => {
             popup.style.animation = 'none'; // Stop the animation
@@ -983,6 +1111,7 @@ class Game {
         document.getElementById('deal').disabled = this.gamePhase !== 'betting' || this.currentBet === 0;
         document.getElementById('insurance').style.display = this.canInsurance() ? 'inline-block' : 'none';
         document.getElementById('decline-insurance').style.display = this.canDeclineInsurance() ? 'inline-block' : 'none';
+        document.getElementById('hint').disabled = !this.canHint();
         document.getElementById('clear-bet').disabled = this.gamePhase !== 'betting';
         document.getElementById('rebet').disabled = !this.canRebet();
         document.getElementById('set-bet').disabled = this.gamePhase !== 'betting';
@@ -992,21 +1121,37 @@ class Game {
 
     updateChips() {
         const chipContainer = document.getElementById('chip-container');
-        chipContainer.innerHTML = '';
-        this.availableChips.forEach(chipValue => {
-            const chip = document.createElement('div');
-            const usable = this.gamePhase === 'betting' && chipValue <= this.player.balance;
-            chip.className = `chip chip-${chipValue}${usable ? '' : ' locked'}`;
-            chip.innerHTML = `
-                <span class="chip-value">$${chipValue}</span>
-            `;
-            chip.onclick = () => this.placeBet(chipValue);
-            chipContainer.appendChild(chip);
-        });
+        const rackState = this.availableChips
+            .map(chipValue => `${chipValue}:${this.gamePhase === 'betting' && chipValue <= this.player.balance ? 1 : 0}`)
+            .join(',');
+        // Only rebuild the rack when something changed, so keyboard focus isn't lost on every click.
+        if (chipContainer.dataset.rackState !== rackState) {
+            chipContainer.dataset.rackState = rackState;
+            chipContainer.innerHTML = '';
+            this.availableChips.forEach(chipValue => {
+                const chip = document.createElement('div');
+                const usable = this.gamePhase === 'betting' && chipValue <= this.player.balance;
+                chip.className = `chip chip-${chipValue}${usable ? '' : ' locked'}`;
+                chip.setAttribute('role', 'button');
+                chip.setAttribute('aria-label', `Add a $${chipValue} chip to your bet`);
+                chip.tabIndex = usable ? 0 : -1;
+                chip.innerHTML = `
+                    <span class="chip-value">$${chipValue}</span>
+                `;
+                chip.onclick = () => this.placeBet(chipValue);
+                chip.onkeydown = event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        this.placeBet(chipValue);
+                    }
+                };
+                chipContainer.appendChild(chip);
+            });
+        }
     
         const betChips = document.getElementById('bet-chips');
         betChips.innerHTML = this.chipsInPot.map(chip => `
-            <div class="chip chip-${chip}${this.gamePhase === 'betting' ? '' : ' locked'}" onclick="game.removeBet(${chip})">
+            <div class="chip chip-${chip}${this.gamePhase === 'betting' ? '' : ' locked'}" role="button" tabindex="0" aria-label="Remove a $${chip} chip from your bet" onclick="game.removeBet(${chip})" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); game.removeBet(${chip}); }">
                 <span class="chip-value">$${chip}</span>
             </div>
         `).join('');
@@ -1059,6 +1204,33 @@ class Game {
         return this.gamePhase === 'insurance';
     }
 
+    canHint() {
+        return this.gamePhase === 'insurance' || (this.gamePhase === 'playerTurn' && this.canStand());
+    }
+
+    // Tells the player what basic strategy recommends right now.
+    hint() {
+        if (!this.canHint()) {
+            return;
+        }
+        if (this.gamePhase === 'insurance') {
+            setMessage("Hint: basic strategy says to decline insurance. It loses money in the long run.");
+            return;
+        }
+        const handIndex = this.currentHandIndex;
+        const action = getBasicStrategyAction(
+            this.player.hands[handIndex].cards,
+            this.dealer.cards[0].value,
+            {
+                canDouble: this.canDouble(handIndex),
+                canSplit: this.canSplit(handIndex),
+                canSurrender: this.canSurrender(handIndex)
+            }
+        );
+        const labels = { hit: 'Hit', stand: 'Stand', double: 'Double down', split: 'Split', surrender: 'Surrender' };
+        setMessage(`Hint: basic strategy says ${labels[action]}.`);
+    }
+
     createCardElement(card) {
         const suitSymbols = {
             '♠': '&spades;',
@@ -1075,7 +1247,7 @@ class Game {
         }
         
         return `
-            <div class="card ${color}">
+            <div class="card ${color}" role="img" aria-label="${describeCard(card)}">
                 <div class="card-corner top-left">
                     <div class="card-value">${card.value}</div>
                     <div class="card-suit">${symbol}</div>
@@ -1158,6 +1330,9 @@ document.getElementById('split').addEventListener('click', () => game.split(game
 document.getElementById('surrender').addEventListener('click', () => game.surrender());
 document.getElementById('insurance').addEventListener('click', () => game.buyInsurance());
 document.getElementById('decline-insurance').addEventListener('click', () => game.declineInsurance());
+document.getElementById('hint').addEventListener('click', () => game.hint());
+document.getElementById('mute').addEventListener('click', toggleMute);
+updateMuteButton();
 document.getElementById('next-hand').addEventListener('click', () => game.prepareNextHand());
 document.getElementById('clear-bet').addEventListener('click', () => game.clearBet());
 document.getElementById('rebet').addEventListener('click', () => game.rebet());

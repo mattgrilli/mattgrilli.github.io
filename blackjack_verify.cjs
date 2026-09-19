@@ -11,7 +11,7 @@ const sourcePath = process.argv[2];
 if (!sourcePath) throw new Error('Usage: node blackjack_verify.cjs path/to/script.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
 
-function makeEnvironment(savedStats = null) {
+function makeEnvironment(savedStats = null, { storageThrows = false, presets = {} } = {}) {
   class Element {
     constructor() {
       this.style = {};
@@ -24,6 +24,7 @@ function makeEnvironment(savedStats = null) {
     }
     appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
     remove() {}
+    setAttribute() {}
     addEventListener() {}
     querySelector() { return new Element(); }
     querySelectorAll() { return []; }
@@ -37,13 +38,15 @@ function makeEnvironment(savedStats = null) {
     return nodes.get(key);
   }
   const storage = new Map();
-  if (savedStats) storage.set('blackjackStats', JSON.stringify(savedStats));
+  if (savedStats) storage.set('blackjackStats', typeof savedStats === 'string' ? savedStats : JSON.stringify(savedStats));
+  for (const [key, value] of Object.entries(presets)) storage.set(key, value);
+  const playLog = [];
   let now = 0;
   let timerId = 0;
   const timers = [];
   const context = vm.createContext({
     console,
-    Audio: class { play() { return Promise.resolve(); } },
+    Audio: class { constructor(src) { this.src = src; } play() { playLog.push(this.src); return Promise.resolve(); } },
     document: {
       body: node('body'),
       getElementById: id => node(id),
@@ -53,8 +56,8 @@ function makeEnvironment(savedStats = null) {
       addEventListener() {}
     },
     localStorage: {
-      getItem: key => storage.get(key) ?? null,
-      setItem: (key, value) => storage.set(key, String(value))
+      getItem: key => { if (storageThrows) throw new Error('storage blocked'); return storage.get(key) ?? null; },
+      setItem: (key, value) => { if (storageThrows) throw new Error('storage blocked'); storage.set(key, String(value)); }
     },
     setTimeout: (fn, ms = 0) => {
       const id = ++timerId;
@@ -66,7 +69,7 @@ function makeEnvironment(savedStats = null) {
       if (index >= 0) timers.splice(index, 1);
     }
   });
-  vm.runInContext(source + '\n;globalThis.auditExports = { Deck, Hand, Player, Game, game, getStats: () => ({...gameStats}), getSession: () => ({...sessionStats}) };', context, { filename: sourcePath });
+  vm.runInContext(source + '\n;globalThis.auditExports = { Deck, Hand, Player, Game, game, getStats: () => ({...gameStats}), getSession: () => ({...sessionStats}), getBasicStrategyAction, toggleMute, isMuted: () => soundMuted, describeCard };', context, { filename: sourcePath });
   function flushTimers() {
     let count = 0;
     while (timers.length) {
@@ -77,7 +80,7 @@ function makeEnvironment(savedStats = null) {
       timer.fn();
     }
   }
-  return { ...context.auditExports, node, flushTimers };
+  return { ...context.auditExports, node, flushTimers, playLog, storage };
 }
 
 function initialDeal(env, values, bet = 100) {
@@ -431,6 +434,118 @@ test('Split hands that land on 21 are skipped automatically', () => {
   assert.equal(env.game.player.hands[0].done, true);
   assert.equal(env.game.gamePhase, 'playerTurn');
   assert.equal(env.game.currentHandIndex, 1);
+});
+
+test('Corrupt or malformed saved stats fall back to a fresh start', () => {
+  for (const bad of ['{not json', '{"gamesPlayed":"x","gamesWon":1,"totalMoney":2}', '[]', 'null']) {
+    const env = makeEnvironment(bad);
+    assert.equal(JSON.stringify(env.getStats()), JSON.stringify({ gamesPlayed: 0, gamesWon: 0, totalMoney: 0 }), bad);
+  }
+});
+
+test('The game works when localStorage is blocked', () => {
+  const env = makeEnvironment(null, { storageThrows: true });
+  initialDeal(env, ['10', '10', 'K', '8']);
+  env.game.stand(0);
+  env.flushTimers();
+  assert.equal(env.game.player.balance, 1100);
+  env.toggleMute(); // must not throw either
+  assert.equal(env.isMuted(), true);
+});
+
+test('Each dealt card plays its sound once', () => {
+  const env = makeEnvironment();
+  initialDeal(env, ['10', '10', 'K', '8']);
+  assert.equal(env.playLog.filter(src => src === 'sounds/card.wav').length, 4);
+});
+
+test('Mute silences every sound and is remembered', () => {
+  const env = makeEnvironment();
+  env.toggleMute();
+  assert.equal(env.isMuted(), true);
+  assert.equal(env.storage.get('blackjackMuted'), '1');
+  assert.equal(env.node('mute').textContent, 'Sound: Off');
+  initialDeal(env, ['A', '10', 'K', '9']); // blackjack: chips, cards, popup sound
+  env.flushTimers();
+  assert.equal(env.playLog.length, 0);
+  env.toggleMute();
+  assert.equal(env.storage.get('blackjackMuted'), '0');
+  const remembered = makeEnvironment();
+  assert.equal(remembered.isMuted(), false);
+});
+
+test('A muted preference is restored on load', () => {
+  const env = makeEnvironment(null, { presets: { blackjackMuted: '1' } });
+  assert.equal(env.isMuted(), true);
+  assert.equal(env.node('mute').textContent, 'Sound: Off');
+  initialDeal(env, ['10', '10', 'K', '8']);
+  assert.equal(env.playLog.length, 0);
+});
+
+test('Basic strategy: hard totals', () => {
+  const s = (cards, up, opts) => makeEnvironment().getBasicStrategyAction(cards.map(v => ({ value: v, suit: '♠' })), up, opts);
+  assert.equal(s(['10', '6'], '10'), 'surrender');
+  assert.equal(s(['10', '6'], '10', { canSurrender: false }), 'hit');
+  assert.equal(s(['10', '6'], '6'), 'stand');
+  assert.equal(s(['10', '2'], '3'), 'hit');
+  assert.equal(s(['10', '2'], '4'), 'stand');
+  assert.equal(s(['6', '5'], '6'), 'double');
+  assert.equal(s(['6', '5'], '6', { canDouble: false }), 'hit');
+  assert.equal(s(['6', '5'], 'A'), 'hit');
+  assert.equal(s(['5', '4'], '5'), 'double');
+  assert.equal(s(['5', '4'], '2'), 'hit');
+  assert.equal(s(['10', '7'], 'A'), 'stand');
+  assert.equal(s(['5', '3'], '6'), 'hit');
+});
+
+test('Basic strategy: soft totals', () => {
+  const s = (cards, up, opts) => makeEnvironment().getBasicStrategyAction(cards.map(v => ({ value: v, suit: '♠' })), up, opts);
+  assert.equal(s(['A', '7'], '6'), 'double');
+  assert.equal(s(['A', '7'], '6', { canDouble: false }), 'stand');
+  assert.equal(s(['A', '7'], '9'), 'hit');
+  assert.equal(s(['A', '7'], '8'), 'stand');
+  assert.equal(s(['A', '6'], '3'), 'double');
+  assert.equal(s(['A', '6'], '2'), 'hit');
+  assert.equal(s(['A', '3'], '5'), 'double');
+  assert.equal(s(['A', '2', '4'], '5'), 'double'); // soft 17 vs 5
+  assert.equal(s(['A', '9'], '6'), 'stand');
+});
+
+test('Basic strategy: pairs', () => {
+  const s = (cards, up, opts) => makeEnvironment().getBasicStrategyAction(cards.map(v => ({ value: v, suit: '♠' })), up, opts);
+  assert.equal(s(['A', 'A'], '10'), 'split');
+  assert.equal(s(['8', '8'], '10'), 'split');
+  assert.equal(s(['10', '10'], '6'), 'stand');
+  assert.equal(s(['9', '9'], '7'), 'stand');
+  assert.equal(s(['9', '9'], '8'), 'split');
+  assert.equal(s(['7', '7'], '8'), 'hit');
+  assert.equal(s(['5', '5'], '6'), 'double');
+  assert.equal(s(['8', '8'], '10', { canSplit: false }), 'surrender');
+  assert.equal(s(['A', 'A'], '5', { canSplit: false }), 'double'); // soft 12 falls back
+});
+
+test('Hint reports the recommendation and recommends declining insurance', () => {
+  const env = makeEnvironment();
+  initialDeal(env, ['10', '10', '6', '5'], 100); // 16 vs 10 -> surrender
+  assert.equal(env.game.canHint(), true);
+  env.game.hint();
+  assert.match(env.node('message').textContent, /Surrender/);
+
+  const env2 = makeEnvironment();
+  initialDeal(env2, ['10', 'A', '9', '7'], 100);
+  assert.equal(env2.game.gamePhase, 'insurance');
+  env2.game.hint();
+  assert.match(env2.node('message').textContent, /decline insurance/);
+
+  const env3 = makeEnvironment();
+  assert.equal(env3.game.canHint(), false);
+});
+
+test('Cards have screen-reader descriptions', () => {
+  const env = makeEnvironment();
+  assert.equal(env.describeCard({ value: 'Q', suit: '♥' }), 'Queen of hearts');
+  assert.equal(env.describeCard({ value: '10', suit: '♠' }), '10 of spades');
+  assert.match(env.game.createCardElement({ value: 'A', suit: '♣' }), /aria-label="Ace of clubs"/);
 });
 
 test('Action buttons are only enabled in the right phases', () => {

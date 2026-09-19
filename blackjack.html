@@ -22,10 +22,13 @@
                     <div id="cards-remaining">Cards in shoe: 312</div>
                 </div>
             </div>
-            <button id="change-theme">Change Theme</button>
+            <div id="top-buttons">
+                <button id="mute">Sound: On</button>
+                <button id="change-theme">Change Theme</button>
+            </div>
         </div>
 
-        <div id="message"></div>
+        <div id="message" role="status" aria-live="polite"></div>
 
         <div id="dealer-hand">
             <div class="hand-title">Dealer's Hand</div>
@@ -62,6 +65,7 @@
                     <button id="surrender">Surrender</button>
                     <button id="insurance">Insurance</button>
                     <button id="decline-insurance">No Insurance</button>
+                    <button id="hint">Hint</button>
                 </div>
             </div>
             <div id="end-dock" class="dock-panel">

@@ -24,6 +24,9 @@ This is an implementation of the classic casino game Blackjack, built with HTML,
 - Responsive design for both desktop and mobile play
 - Session and lifetime statistics tracking
 - Hot and cold streak notifications
+- **Hint** button that suggests the basic-strategy play (and advises declining insurance)
+- Sound effects with a mute button (your choice is remembered)
+- Keyboard-friendly: chips are focusable buttons, cards are labeled for screen readers, and results are announced
 - Keyboard shortcuts: H (hit), S (stand), D (double), P (split), R (surrender), Enter (deal)
 
 ## Running Locally
@@ -57,7 +60,8 @@ To play online, use the [Play Now](https://mattgrilli.github.io/blackjack.html) 
 - Surrender returns half your bet (rounded up). It is only available as your first action on an unsplit hand.
 - A hand that reaches 21 stands automatically.
 - If you run out of money, you can start a new game with $1000.
-- Your bankroll resets to $1000 on page reload. Lifetime statistics are saved in your browser; session statistics are not.
+- Your bankroll resets to $1000 on page reload. Lifetime statistics and the sound setting are saved in your browser; session statistics are not.
+- The Hint button follows basic strategy for a multi-deck shoe where the dealer stands on all 17s.
 
 ## Technologies Used
 
@@ -75,9 +79,8 @@ node blackjack_verify.cjs script.js
 
 ## Future Improvements
 
-- Basic strategy hints
-- A mute button for the sound effects
 - A protected "vault" balance that can't be bet
+- Separate the game engine from the page code
 - More detailed statistics and an achievement system
 
 ## Contributing
