@@ -1,3 +1,5 @@
+const STARTING_BALANCE = 1000;
+
 const suits = ['♠', '♥', '♦', '♣'];
 const values = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 
@@ -32,9 +34,9 @@ function formatMoney(amount) {
 // Update stats display
 function updateStatsDisplay() {
     const line = (label, stats) =>
-        `${label}: Games Played: ${stats.gamesPlayed} | Games Won: ${stats.gamesWon} | Total Won/Lost: ${formatMoney(stats.totalMoney)}`;
-    document.getElementById('stats').innerHTML =
-        `<div>${line('Session', sessionStats)}</div><div>${line('Lifetime', gameStats)}</div>`;
+        `${label}: ${stats.gamesPlayed} played, ${stats.gamesWon} won, ${formatMoney(stats.totalMoney)}`;
+    document.getElementById('stats').textContent =
+        `${line('Session', sessionStats)}  |  ${line('Lifetime', gameStats)}`;
 }
 
 // Lifetime statistics persist in localStorage; session statistics start fresh
@@ -173,12 +175,14 @@ class Player {
             return null;
         }
         const wager = hand.bet;
+        // Payouts are always whole dollars: blackjack pays 3:2 rounded down, and a
+        // surrender refund is half the wager rounded up.
         const payouts = {
             win: wager * 2,
             loss: 0,
             push: wager,
-            blackjack: wager * 2.5,
-            surrender: wager / 2
+            blackjack: wager + Math.floor(wager * 1.5),
+            surrender: Math.ceil(wager / 2)
         };
         if (!(outcome in payouts)) {
             throw new Error(`Unknown outcome: ${outcome}`);
@@ -244,6 +248,7 @@ class Game {
         this.themes = ['theme1', 'theme2', 'theme3'];
         this.currentTheme = 0;
         this.lastHandBeforeReshuffle = false;
+        this.lastBet = 0;         // wager of the previous round, for Rebet
         this.roundMessages = [];  // result messages collected over the current round
         this.pendingPopups = [];  // per-hand result popups waiting for the next render
     }
@@ -304,6 +309,52 @@ class Game {
         return true;
     }
 
+    // Sets the whole bet to an exact whole-dollar amount, replacing any chips already
+    // in the pot. The amount is broken into the largest chips that fit.
+    setBet(amount) {
+        if (this.gamePhase !== 'betting') {
+            setMessage('Bets are locked once dealing begins.');
+            return false;
+        }
+        if (!Number.isInteger(amount) || amount < 1) {
+            setMessage('Enter a whole-dollar bet of at least $1.');
+            return false;
+        }
+        if (amount > this.player.balance + this.currentBet) {
+            setMessage('Insufficient funds for this bet.');
+            return false;
+        }
+        this.player.balance += this.currentBet;
+        this.chipsInPot = [];
+        let remaining = amount;
+        for (const chip of [...this.availableChips].sort((a, b) => b - a)) {
+            while (remaining >= chip) {
+                this.chipsInPot.push(chip);
+                remaining -= chip;
+            }
+        }
+        this.currentBet = amount;
+        this.player.balance -= amount;
+        this.updateUI();
+        setMessage(`Bet set to $${amount}.`);
+        playSound(chipSound);
+        return true;
+    }
+
+    canRebet() {
+        return this.gamePhase === 'betting' &&
+               this.lastBet > 0 &&
+               this.lastBet <= this.player.balance + this.currentBet;
+    }
+
+    rebet() {
+        if (!this.canRebet()) {
+            setMessage('Nothing to rebet.');
+            return false;
+        }
+        return this.setBet(this.lastBet);
+    }
+
     deal() {
         if (this.gamePhase !== 'betting') {
             return;
@@ -313,6 +364,7 @@ class Game {
             return;
         }
 
+        this.lastBet = this.currentBet;
         this.roundMessages = [];
         this.pendingPopups = [];
         this.player.insurance = 0;
@@ -454,8 +506,8 @@ class Game {
             hand.done = true;
             this.settleHand(handIndex, 'loss');
             this.advanceToNextHand();
-        } else if (hand.doubledDown) {
-            this.stand(handIndex);
+        } else if (hand.doubledDown || hand.getScore() === 21) {
+            this.stand(handIndex); // a doubled hand is done, and there is no reason to hit on 21
         }
         this.updateUI();
         this.updateShoeDisplay();
@@ -500,8 +552,16 @@ class Game {
         this.player.hands[handIndex].addCard(card1);
         this.player.hands[handIndex + 1].addCard(card2);
         this.noteCutCard(isLastHand1 || isLastHand2);
+        this.standOnTwentyOne();
         this.updateUI();
         this.updateShoeDisplay();
+    }
+
+    // After a split a hand can land on 21; skip past any such hands automatically.
+    standOnTwentyOne() {
+        while (this.gamePhase === 'playerTurn' && this.player.hands[this.currentHandIndex].getScore() === 21) {
+            this.stand(this.currentHandIndex);
+        }
     }
 
     surrender() {
@@ -527,17 +587,24 @@ class Game {
         }
     }
 
+    // Insurance costs half the wager, rounded down to whole dollars (minimum $1).
+    insuranceStake() {
+        return Math.floor(this.player.hands[0].bet / 2);
+    }
+
     canOfferInsurance() {
+        const stake = this.insuranceStake();
         return this.allowInsurance &&
                this.dealer.cards[0].value === 'A' &&
-               this.player.balance >= this.player.hands[0].bet / 2;
+               stake >= 1 &&
+               this.player.balance >= stake;
     }
 
     buyInsurance() {
         if (!this.canInsurance()) {
             return;
         }
-        const insuranceAmount = this.player.hands[0].bet / 2;
+        const insuranceAmount = this.insuranceStake();
         this.player.placeInsurance(insuranceAmount);
         this.roundMessages.push(`Insurance bought for $${insuranceAmount}.`);
         this.resolveOpeningHands();
@@ -702,8 +769,8 @@ class Game {
                 this.streakCounter = Math.max(0, this.streakCounter + 1);
                 break;
             case 'surrender':
-                text = `You surrendered. Half of your bet ($${wager / 2}) is returned.`;
-                popupMessage = `SURRENDER<br>$${wager / 2} returned`;
+                text = `You surrendered. $${settlement.payout} of your $${wager} bet is returned.`;
+                popupMessage = `SURRENDER<br>$${settlement.payout} returned`;
                 playSound(drawSound);
                 this.streakCounter = 0;
                 break;
@@ -722,9 +789,28 @@ class Game {
         if (this.lastHandBeforeReshuffle) {
             this.reshuffleShoe();
         }
+        if (this.isBroke()) {
+            this.roundMessages.push("You're out of money!");
+        }
         setMessage(this.roundMessages.join(' '));
         this.updateUI();
-        document.getElementById('next-hand').style.display = 'inline-block';
+        document.getElementById('next-hand').style.display = this.isBroke() ? 'none' : 'inline-block';
+    }
+
+    // Out of money at the end of a round: there is nothing left to bet.
+    isBroke() {
+        return this.gamePhase === 'gameOver' && this.player.balance < 1;
+    }
+
+    restart() {
+        if (!this.isBroke()) {
+            return;
+        }
+        this.player.balance = STARTING_BALANCE;
+        this.streakCounter = 0;
+        this.lastBet = 0;
+        this.prepareNextHand();
+        setMessage(`New game. You start again with $${STARTING_BALANCE}.`);
     }
 
     reshuffleShoe() {
@@ -804,6 +890,11 @@ class Game {
     }
 
     updateUI() {
+        // The phase drives which parts of the table are shown (betting circle vs hands,
+        // and which control-dock panel); see the [data-phase] rules in styles.css.
+        document.getElementById('game-container').dataset.phase = this.gamePhase;
+        document.getElementById('bet-label').textContent =
+            this.currentBet > 0 ? `Bet: $${this.currentBet}` : 'Place your bet';
         document.getElementById('balance').textContent = `Balance: $${this.player.balance}`;
         document.getElementById('bet').textContent = `Current Bet: $${this.currentBet}`;
         document.getElementById('cards-remaining').textContent = `Cards in shoe: ${this.deck.cardsRemaining()}`;
@@ -813,6 +904,7 @@ class Game {
         dealerCardsEl.innerHTML = this.dealer.cards.map((card, index) => 
             holeCardHidden && index === 1 ? this.createCardElement({value: '?', suit: '?'}) : this.createCardElement(card)
         ).join('');
+        this.fitCards(dealerCardsEl, dealerCardsEl.clientWidth);
         
         if (!holeCardHidden) {
             document.getElementById('dealer-hand').querySelector('.hand-title').textContent = `Dealer's Hand (Score: ${this.dealer.getScore()})`;
@@ -824,11 +916,15 @@ class Game {
         if (this.player.hands.length > 0 && this.gamePhase !== 'betting') {
             playerHandsEl.innerHTML = this.player.hands.map((hand, index) => `
                 <div class="hand ${index === this.currentHandIndex && this.gamePhase === 'playerTurn' ? 'active-hand' : ''}">
-                    <div class="hand-title">Hand ${index + 1} (Score: ${hand.getScore()})${this.handStatusLabel(hand)}</div>
+                    <div class="hand-title">Hand ${index + 1} (Score: ${hand.getScore()})</div>
                     <div class="hand-cards">${hand.cards.map(card => this.createCardElement(card)).join('')}</div>
                     <div class="hand-bet">Bet: $${hand.bet}</div>
+                    <div class="hand-status">${this.handStatusLabel(hand)}</div>
                 </div>
             `).join('');
+            // Each hand gets an equal share of the row, less its margin and padding.
+            const widthPerHand = playerHandsEl.clientWidth / this.player.hands.length - 40;
+            playerHandsEl.querySelectorAll('.hand-cards').forEach(row => this.fitCards(row, widthPerHand));
         } else {
             playerHandsEl.innerHTML = ''; // Clear the player hands area if no hands or in betting phase
         }
@@ -851,9 +947,29 @@ class Game {
             return '';
         }
         if (hand.result === 'loss' && hand.getScore() > 21) {
-            return ' - BUST';
+            return 'BUST';
         }
-        return ` - ${hand.result.toUpperCase()}`;
+        return hand.result.toUpperCase();
+    }
+
+    // Keeps a row of cards on one line: when the cards would be wider than the space
+    // available, each card after the first overlaps the previous one just enough to fit.
+    fitCards(rowEl, availableWidth) {
+        const cards = rowEl.querySelectorAll('.card');
+        if (cards.length < 2) {
+            return;
+        }
+        const cardMargin = 5; // .card has a 5px right margin
+        const step = cards[0].offsetWidth + cardMargin;
+        const needed = step * cards.length - cardMargin;
+        if (!(needed > availableWidth)) {
+            return;
+        }
+        const minVisible = 22; // always leave the corner value readable
+        const overlap = Math.min(step - minVisible, (needed - availableWidth) / (cards.length - 1));
+        for (let i = 1; i < cards.length; i++) {
+            cards[i].style.marginLeft = `-${overlap}px`;
+        }
     }
 
     updateActionButtons() {
@@ -868,6 +984,10 @@ class Game {
         document.getElementById('insurance').style.display = this.canInsurance() ? 'inline-block' : 'none';
         document.getElementById('decline-insurance').style.display = this.canDeclineInsurance() ? 'inline-block' : 'none';
         document.getElementById('clear-bet').disabled = this.gamePhase !== 'betting';
+        document.getElementById('rebet').disabled = !this.canRebet();
+        document.getElementById('set-bet').disabled = this.gamePhase !== 'betting';
+        document.getElementById('bet-amount').disabled = this.gamePhase !== 'betting';
+        document.getElementById('restart').style.display = this.isBroke() ? 'inline-block' : 'none';
     }
 
     updateChips() {
@@ -875,7 +995,8 @@ class Game {
         chipContainer.innerHTML = '';
         this.availableChips.forEach(chipValue => {
             const chip = document.createElement('div');
-            chip.className = `chip chip-${chipValue}`;
+            const usable = this.gamePhase === 'betting' && chipValue <= this.player.balance;
+            chip.className = `chip chip-${chipValue}${usable ? '' : ' locked'}`;
             chip.innerHTML = `
                 <span class="chip-value">$${chipValue}</span>
             `;
@@ -931,7 +1052,7 @@ class Game {
     // Insurance is a one-time decision made in its own phase, before the dealer's
     // hole card is checked. Once decided, the phase moves on and it cannot recur.
     canInsurance() {
-        return this.gamePhase === 'insurance' && this.player.balance >= this.player.hands[0].bet / 2;
+        return this.gamePhase === 'insurance' && this.player.balance >= this.insuranceStake();
     }
 
     canDeclineInsurance() {
@@ -969,7 +1090,7 @@ class Game {
     }
 
     animateChip(amount) {
-        const chipElement = document.querySelector(`.chip-${amount}`);
+        const chipElement = document.querySelector(`#chip-container .chip-${amount}`);
         const betDisplay = document.getElementById('bet-display');
         
         if (!chipElement || !betDisplay) {
@@ -1026,7 +1147,7 @@ function setMessage(msg) {
 }
 
 // Create the game instance
-let game = new Game(1000);
+let game = new Game(STARTING_BALANCE);
 
 // Event Listeners
 document.getElementById('deal').addEventListener('click', () => game.deal());
@@ -1039,10 +1160,28 @@ document.getElementById('insurance').addEventListener('click', () => game.buyIns
 document.getElementById('decline-insurance').addEventListener('click', () => game.declineInsurance());
 document.getElementById('next-hand').addEventListener('click', () => game.prepareNextHand());
 document.getElementById('clear-bet').addEventListener('click', () => game.clearBet());
+document.getElementById('rebet').addEventListener('click', () => game.rebet());
+document.getElementById('restart').addEventListener('click', () => game.restart());
+
+const betAmountInput = document.getElementById('bet-amount');
+function applyBetAmount() {
+    if (game.setBet(Number(betAmountInput.value))) {
+        betAmountInput.value = '';
+    }
+}
+document.getElementById('set-bet').addEventListener('click', applyBetAmount);
+betAmountInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+        applyBetAmount();
+    }
+});
 document.getElementById('change-theme').addEventListener('click', () => game.changeTheme());
 
 // Keyboard shortcuts
 document.addEventListener('keydown', (event) => {
+    if (event.target && event.target.tagName === 'INPUT') {
+        return; // typing a bet amount must not trigger game shortcuts
+    }
     if (game.gamePhase === 'playerTurn') {
         switch(event.key.toLowerCase()) {
             case 'h': if (game.canHit()) game.hit(game.currentHandIndex); break;

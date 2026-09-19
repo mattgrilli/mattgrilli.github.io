@@ -7,57 +7,70 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div id="game-container">
-        <h1>Matt's Blackjack</h1>
-        
-        <div id="game-info">
-            <div id="stats-bar">
-                <div id="balance">Balance: $1000</div>
-                <div id="bet">Current Bet: $0</div>
-            </div>
-            <div id="shoe-container">
-                <div id="shoe">
-                    <div id="shoe-fill"></div>
+    <div id="game-container" data-phase="betting">
+        <div id="top-bar">
+            <h1>Matt's Blackjack</h1>
+            <div id="game-info">
+                <div id="stats-bar">
+                    <div id="balance">Balance: $1000</div>
+                    <div id="bet">Current Bet: $0</div>
                 </div>
-                <div id="cards-remaining">Cards in shoe: 312</div>
+                <div id="shoe-container">
+                    <div id="shoe">
+                        <div id="shoe-fill"></div>
+                    </div>
+                    <div id="cards-remaining">Cards in shoe: 312</div>
+                </div>
             </div>
+            <button id="change-theme">Change Theme</button>
         </div>
 
-        <div id="betting-area">
-            <h3>Place Your Bets</h3>
-            <div id="chip-container"></div>
-            <div id="bet-display">
-                Current Bet:
-                <div id="bet-chips"></div>
-            </div>
-            <button id="clear-bet">Clear Bet</button>
-        </div>
         <div id="message"></div>
-        <div id="stats"></div>
+
         <div id="dealer-hand">
             <div class="hand-title">Dealer's Hand</div>
             <div id="dealer-cards"></div>
         </div>
 
+        <!-- The player's spot on the felt: the betting circle while betting, the hands once dealt -->
         <div id="player-hands-container">
-            <h2>Player's Hands</h2>
+            <div id="bet-display">
+                <div id="bet-label">Place your bet</div>
+                <div id="bet-chips"></div>
+            </div>
             <div id="player-hands"></div>
         </div>
 
-        <div id="actions">
-            <button id="deal">Deal</button>
-            <button id="hit">Hit</button>
-            <button id="stand">Stand</button>
-            <button id="double">Double Down</button>
-            <button id="split">Split</button>
-            <button id="surrender">Surrender</button>
-            <button id="insurance">Insurance</button>
-            <button id="decline-insurance">No Insurance</button>
-            <button id="next-hand">Next Hand</button>
-            <button id="change-theme">Change Theme</button>
+        <!-- One control dock; only the panel for the current phase is shown (see data-phase) -->
+        <div id="dock">
+            <div id="bet-dock" class="dock-panel">
+                <div id="chip-container"></div>
+                <div id="bet-controls">
+                    <button id="clear-bet">Clear Bet</button>
+                    <button id="rebet">Rebet</button>
+                    <input type="number" id="bet-amount" min="1" step="1" inputmode="numeric" placeholder="Bet amount" aria-label="Bet amount in dollars">
+                    <button id="set-bet">Set Bet</button>
+                    <button id="deal">Deal</button>
+                </div>
+            </div>
+            <div id="play-dock" class="dock-panel">
+                <div id="actions">
+                    <button id="hit">Hit</button>
+                    <button id="stand">Stand</button>
+                    <button id="double">Double Down</button>
+                    <button id="split">Split</button>
+                    <button id="surrender">Surrender</button>
+                    <button id="insurance">Insurance</button>
+                    <button id="decline-insurance">No Insurance</button>
+                </div>
+            </div>
+            <div id="end-dock" class="dock-panel">
+                <button id="next-hand">Next Hand</button>
+                <button id="restart">New Game ($1000)</button>
+            </div>
         </div>
 
-        
+        <div id="stats"></div>
     </div>
     <script src="script.js"></script>
 </body>

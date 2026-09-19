@@ -15,6 +15,7 @@ function makeEnvironment(savedStats = null) {
   class Element {
     constructor() {
       this.style = {};
+      this.dataset = {};
       this.classList = { add() {}, remove() {}, toggle() {} };
       this.innerHTML = '';
       this.textContent = '';
@@ -25,6 +26,7 @@ function makeEnvironment(savedStats = null) {
     remove() {}
     addEventListener() {}
     querySelector() { return new Element(); }
+    querySelectorAll() { return []; }
     cloneNode() { return new Element(); }
     getBoundingClientRect() { return { left: 0, top: 0, width: 100, height: 100 }; }
     animate() { return {}; }
@@ -140,7 +142,7 @@ test('Surrender refunds half and records the real loss', () => {
   assert.equal(env.game.player.balance, 950);
   assert.equal(env.getStats().totalMoney, -50);
   assert.equal(env.getSession().totalMoney, -50);
-  assert.match(env.node('message').textContent, /\$50\)/);
+  assert.match(env.node('message').textContent, /\$50 of your \$100/);
   assert.equal(env.game.gamePhase, 'gameOver');
 });
 
@@ -263,7 +265,7 @@ test('Session stats start at zero while lifetime stats reload', () => {
   const env = makeEnvironment({ gamesPlayed: 10, gamesWon: 7, totalMoney: 3000 });
   assert.equal(env.game.player.balance, 1000);
   assert.equal(JSON.stringify(env.getSession()), JSON.stringify({ gamesPlayed: 0, gamesWon: 0, totalMoney: 0 }));
-  assert.match(env.node('stats').innerHTML, /Session: .*Lifetime: /);
+  assert.match(env.node('stats').textContent, /Session: .*Lifetime: /);
   initialDeal(env, ['10', '10', 'K', '8']);
   env.game.stand(0);
   env.flushTimers();
@@ -301,6 +303,134 @@ test('Double down doubles the wager, takes one card, and pays double', () => {
   assert.equal(env.game.gamePhase, 'gameOver');
   assert.equal(env.game.player.balance, 1200);
   assert.equal(env.getStats().totalMoney, 200);
+});
+
+test('Blackjack on an odd bet pays whole dollars (3:2 rounded down)', () => {
+  const env = makeEnvironment();
+  initialDeal(env, ['A', '10', 'K', '9'], 5);
+  assert.equal(env.game.player.balance, 1007);
+  assert.equal(env.getStats().totalMoney, 7);
+});
+
+test('Surrender on an odd bet refunds half rounded up', () => {
+  const env = makeEnvironment();
+  initialDeal(env, ['10', '9', '6', '8'], 5);
+  env.game.surrender();
+  assert.equal(env.game.player.balance, 998);
+  assert.equal(env.getStats().totalMoney, -2);
+});
+
+test('Insurance on a $1 bet is not offered (stake would be under $1)', () => {
+  const env = makeEnvironment();
+  initialDeal(env, ['10', 'A', '9', '7', '2'], 1);
+  assert.equal(env.game.gamePhase, 'playerTurn');
+  assert.equal(env.game.canInsurance(), false);
+});
+
+test('Insurance on an odd bet uses a whole-dollar stake', () => {
+  const env = makeEnvironment();
+  initialDeal(env, ['10', 'A', '9', 'K'], 5);
+  env.game.buyInsurance(); // stake $2, pays +$4; hand loses $5
+  assert.equal(env.game.player.balance, 999);
+  assert.equal(env.getStats().totalMoney, -1);
+  assert.ok(Number.isInteger(env.game.player.balance));
+});
+
+test('Running out of money offers a restart instead of a dead end', () => {
+  const env = makeEnvironment();
+  initialDeal(env, ['6', '10', '7', '9'], 1000);
+  env.game.stand(0);
+  env.flushTimers();
+  assert.equal(env.game.player.balance, 0);
+  assert.equal(env.game.isBroke(), true);
+  assert.equal(env.node('restart').style.display, 'inline-block');
+  assert.equal(env.node('next-hand').style.display, 'none');
+  assert.match(env.node('message').textContent, /out of money/);
+  env.game.restart();
+  assert.equal(env.game.player.balance, 1000);
+  assert.equal(env.game.gamePhase, 'betting');
+  assert.equal(env.node('restart').style.display, 'none');
+  assert.equal(env.getSession().totalMoney, -1000); // session keeps the loss
+});
+
+test('Restart does nothing while you still have money', () => {
+  const env = makeEnvironment();
+  initialDeal(env, ['10', '10', 'K', '8']);
+  env.game.stand(0);
+  env.flushTimers();
+  env.game.restart();
+  assert.equal(env.game.player.balance, 1100);
+  assert.equal(env.game.gamePhase, 'gameOver');
+});
+
+test('Set Bet replaces the pot with an exact amount broken into chips', () => {
+  const env = makeEnvironment();
+  assert.equal(env.game.setBet(137), true);
+  assert.equal(env.game.currentBet, 137);
+  assert.equal(env.game.player.balance, 863);
+  assert.equal(env.game.chipsInPot.reduce((a, b) => a + b, 0), 137);
+  assert.equal(env.game.setBet(50), true); // replaces, refunding the old pot first
+  assert.equal(env.game.player.balance, 950);
+  assert.equal(env.game.chipsInPot.reduce((a, b) => a + b, 0), 50);
+  assert.equal(env.game.setBet(950 + 50), true);
+  assert.equal(env.game.player.balance, 0);
+});
+
+test('Set Bet rejects invalid amounts and locks outside betting', () => {
+  const env = makeEnvironment();
+  for (const bad of [0, -5, 2.5, NaN, 1001]) {
+    assert.equal(env.game.setBet(bad), false, `amount ${bad}`);
+    assert.equal(env.game.player.balance, 1000);
+  }
+  initialDeal(env, ['10', '10', 'K', '8']);
+  assert.equal(env.game.setBet(500), false);
+  assert.equal(env.game.player.balance, 900);
+});
+
+test('Rebet repeats the previous wager', () => {
+  const env = makeEnvironment();
+  assert.equal(env.game.canRebet(), false);
+  assert.equal(env.game.rebet(), false);
+  initialDeal(env, ['10', '10', 'K', '8'], 100);
+  env.game.stand(0);
+  env.flushTimers();
+  env.game.prepareNextHand();
+  assert.equal(env.game.canRebet(), true);
+  assert.equal(env.game.rebet(), true);
+  assert.equal(env.game.currentBet, 100);
+  assert.equal(env.game.player.balance, 1000);
+  env.game.rebet(); // pressing again must not double the bet
+  assert.equal(env.game.currentBet, 100);
+  assert.equal(env.game.player.balance, 1000);
+});
+
+test('Rebet is unavailable when the last wager is no longer affordable', () => {
+  const env = makeEnvironment();
+  initialDeal(env, ['6', '10', '7', '9'], 600);
+  env.game.stand(0);
+  env.flushTimers(); // loses 600 -> balance 400
+  env.game.prepareNextHand();
+  assert.equal(env.game.canRebet(), false);
+});
+
+test('A hand that reaches 21 by hitting stands automatically', () => {
+  const env = makeEnvironment();
+  initialDeal(env, ['5', '10', '6', '7', 'K']);
+  env.game.hit(0);
+  env.flushTimers();
+  assert.equal(env.game.gamePhase, 'gameOver');
+  assert.equal(env.game.player.hands[0].result, 'win');
+  assert.equal(env.game.player.balance, 1100);
+});
+
+test('Split hands that land on 21 are skipped automatically', () => {
+  const env = makeEnvironment();
+  initialDeal(env, ['A', '10', 'A', '7', 'K', '9']);
+  env.game.split(0); // A+K = 21, A+9 = 20
+  assert.equal(env.game.player.hands[0].getScore(), 21);
+  assert.equal(env.game.player.hands[0].done, true);
+  assert.equal(env.game.gamePhase, 'playerTurn');
+  assert.equal(env.game.currentHandIndex, 1);
 });
 
 test('Action buttons are only enabled in the right phases', () => {
@@ -351,6 +481,7 @@ async function fuzz(rounds) {
       break;
     }
     assert.ok(g.player.hands.every(hand => hand.settled), 'every hand settled at round end');
+    assert.ok(Number.isInteger(g.player.balance), `non-integer balance ${g.player.balance}`);
     const expected = 1000 + (env.sessionAdjust || 0) + env.getSession().totalMoney;
     assert.equal(g.player.balance, expected, `round ${round}: balance ${g.player.balance} vs ${expected}`);
     g.prepareNextHand();
