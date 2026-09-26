@@ -100,6 +100,11 @@ format (and the real published odds) of a well-known multi-state drawing game. T
 project is not affiliated with or endorsed by any lottery operator — there are no real
 tickets, no real drawings and no real prizes.
 
+The real point of it: the built-in paytable shows the actual odds for every prize, so you
+can watch just how rarely any of them hit — even the small ones — across as many
+drawings as you're willing to sit through. Both games link to each other from their top
+bar, so it's easy to switch between them.
+
 ### Features
 
 - **Pick your own starting balance** before buying your first ticket &mdash; try $20 or
