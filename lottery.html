@@ -57,6 +57,11 @@
 
         <div id="dock">
             <div id="buy-dock" class="dock-panel">
+                <div id="bankroll-controls">
+                    <label for="bankroll-amount">Start with $</label>
+                    <input type="number" id="bankroll-amount" min="2" step="1" inputmode="numeric" placeholder="100" aria-label="Starting balance in dollars">
+                    <button id="set-bankroll">Set</button>
+                </div>
                 <div id="quantity-container"></div>
                 <div id="buy-controls">
                     <button id="clear-tickets">Clear Tickets</button>

@@ -102,6 +102,9 @@ tickets, no real drawings and no real prizes.
 
 ### Features
 
+- **Pick your own starting balance** before buying your first ticket &mdash; try $20 or
+  $20,000,000 and see how the odds actually play out. It's also what you get back if you
+  go broke and start over
 - Buy tickets in quick amounts (1, 5, 10, 25, 50), an exact quantity, or hit **Max** to
   spend your whole balance
 - A real drawing every time: the odds for every prize tier come from combinatorics, not a

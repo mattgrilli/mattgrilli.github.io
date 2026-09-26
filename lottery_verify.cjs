@@ -80,6 +80,43 @@ test('Engine: outcomesFor sums to the total across every match count', () => {
 // Part 2: the engine's behaviour
 // =====================================================================
 
+test('Engine: the player can set their own starting balance before buying anything', () => {
+  const e = new LotteryEngine({ startingBalance: 100 });
+  assert.equal(e.canSetBalance(), true);
+  assert.equal(e.setBalance(5000).ok, true);
+  assert.equal(e.balance, 5000);
+  assert.equal(e.startingBalance, 5000); // also becomes the restart-to amount
+  assert.equal(e.setBalance(1.5).reason, 'invalid');
+  assert.equal(e.setBalance(-10).reason, 'invalid');
+  assert.equal(e.setBalance(1).reason, 'invalid'); // below the ticket price
+  assert.equal(e.setBalance(e.ticketPrice).ok, true); // exactly the ticket price is fine
+});
+
+test('Engine: setting the balance is locked once a ticket is held', () => {
+  const e = new LotteryEngine({ startingBalance: 100 });
+  e.buyTickets(1);
+  assert.equal(e.canSetBalance(), false);
+  assert.equal(e.setBalance(5000).reason, 'locked');
+  assert.equal(e.balance, 98);
+});
+
+test('Engine: a chosen balance survives going broke and restarting', () => {
+  const e = new LotteryEngine({ startingBalance: 100 });
+  e.setBalance(6);
+  e.buyTickets(1);
+  e.tickets[0] = { whites: [60, 61, 62, 63, 64], red: 25 }; // guaranteed not to match
+  e.draw({ whites: [1, 2, 3, 4, 5], red: 20 });
+  e.nextRound();
+  assert.equal(e.balance, 4);
+  e.buyTickets(2);
+  e.tickets.forEach(t => { t.whites = [60, 61, 62, 63, 64]; t.red = 25; });
+  e.draw({ whites: [1, 2, 3, 4, 5], red: 20 });
+  assert.equal(e.balance, 0);
+  assert.equal(e.isBroke(), true);
+  assert.equal(e.restart(), true);
+  assert.equal(e.balance, 6); // back to the chosen $6, not the original $100
+});
+
 test('Engine: buying tickets deducts the cost and records the purchase', () => {
   const e = new LotteryEngine({ startingBalance: 100 });
   const events = record(e);
@@ -436,6 +473,38 @@ function makeEnvironment(savedStats = null, { storageThrows = false, presets = {
 function forcedDraw(env, whites, red) {
   return env.engine.draw({ whites, red });
 }
+
+test('Page: setting the starting balance updates the balance and the restart amount', () => {
+  const env = makeEnvironment();
+  assert.equal(env.node('bankroll-amount').disabled, false);
+  assert.equal(env.kiosk.setBankroll(5000), true);
+  assert.equal(env.engine.balance, 5000);
+  assert.match(env.node('balance').textContent, /\$5,000/);
+  assert.match(env.node('message').textContent, /Starting balance set to \$5,000/);
+
+  assert.equal(env.kiosk.setBankroll(0), false);
+  assert.match(env.node('message').textContent, /at least \$2/);
+  assert.equal(env.engine.balance, 5000); // unchanged by the failed attempt
+
+  env.kiosk.buy(1);
+  assert.equal(env.node('bankroll-amount').disabled, true);
+  assert.equal(env.node('set-bankroll').disabled, true);
+  assert.equal(env.kiosk.setBankroll(100), false);
+  assert.match(env.node('message').textContent, /before buying tickets/);
+});
+
+test('Page: a chosen starting balance is what New Game restores after going broke', () => {
+  const env = makeEnvironment();
+  env.kiosk.setBankroll(6);
+  env.kiosk.buy(3);
+  env.engine.tickets.forEach(t => { t.whites = [60, 61, 62, 63, 64]; t.red = 25; });
+  forcedDraw(env, [1, 2, 3, 4, 5], 20);
+  assert.equal(env.engine.balance, 0);
+  assert.equal(env.node('restart').style.display, 'inline-block');
+  env.kiosk.restart();
+  assert.equal(env.engine.balance, 6);
+  assert.match(env.node('message').textContent, /start again with \$6/);
+});
 
 test('Page: quantity chips buy tickets, and chips you cannot afford are locked', () => {
   const env = makeEnvironment();

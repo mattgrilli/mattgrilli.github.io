@@ -216,6 +216,23 @@ class Kiosk {
         setTimeout(() => popup.remove(), 4000);
     }
 
+    // ---- Bankroll ----
+
+    setBankroll(amount) {
+        const result = this.engine.setBalance(amount);
+        if (!result.ok) {
+            if (result.reason === 'invalid') {
+                setMessage(`Enter a whole-dollar amount of at least $${this.engine.ticketPrice}.`);
+            } else {
+                setMessage('You can only set your starting balance before buying tickets.');
+            }
+            return false;
+        }
+        setMessage(`Starting balance set to ${formatMoney(amount)}.`);
+        this.updateUI();
+        return true;
+    }
+
     // ---- Buying ----
 
     buy(quantity) {
@@ -459,6 +476,8 @@ class Kiosk {
         document.getElementById('buy-custom').disabled = engine.phase !== 'buying';
         document.getElementById('draw-button').disabled = !engine.canDraw();
         document.getElementById('restart').style.display = engine.isBroke() ? 'inline-block' : 'none';
+        document.getElementById('bankroll-amount').disabled = !engine.canSetBalance();
+        document.getElementById('set-bankroll').disabled = !engine.canSetBalance();
     }
 
     buildPaytable() {
@@ -509,6 +528,20 @@ document.getElementById('clear-tickets').addEventListener('click', () => kiosk.c
 document.getElementById('draw-button').addEventListener('click', () => kiosk.draw());
 document.getElementById('next-round').addEventListener('click', () => kiosk.nextRound());
 document.getElementById('restart').addEventListener('click', () => kiosk.restart());
+
+const bankrollInput = document.getElementById('bankroll-amount');
+function applyBankroll() {
+    const value = Number(bankrollInput.value);
+    if (kiosk.setBankroll(value)) {
+        bankrollInput.value = '';
+    }
+}
+document.getElementById('set-bankroll').addEventListener('click', applyBankroll);
+bankrollInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+        applyBankroll();
+    }
+});
 
 const quantityInput = document.getElementById('quantity-amount');
 function applyQuantity() {

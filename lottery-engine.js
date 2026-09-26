@@ -125,6 +125,30 @@ class LotteryEngine {
         this.emit('phase', { phase });
     }
 
+    // ---- Bankroll ----
+
+    // Lets the player pick how much money they start with. Only allowed before any
+    // tickets are held for the round, so it can't be used to top up mid-round. This also
+    // becomes the amount a later restart() (going broke) resets to, since a player who
+    // deliberately chose a bankroll almost certainly wants to keep experimenting with it,
+    // not fall back to some earlier default.
+    canSetBalance() {
+        return this.phase === 'buying' && this.tickets.length === 0;
+    }
+
+    setBalance(amount) {
+        if (!this.canSetBalance()) {
+            return fail('locked');
+        }
+        if (!Number.isInteger(amount) || amount < this.ticketPrice) {
+            return fail('invalid');
+        }
+        this.balance = amount;
+        this.startingBalance = amount;
+        this.emit('balanceSet', { amount });
+        return ok();
+    }
+
     // ---- Buying tickets ----
 
     canBuy(quantity) {
