@@ -88,6 +88,56 @@ node blackjack_verify.cjs
 - A protected "vault" balance that can't be bet
 - More detailed statistics and an achievement system
 
+---
+
+## 🎟️ Also in This Repo: Matt's Lucky Draw
+
+## ▶️ [Play Lucky Draw](https://mattgrilli.github.io/lottery.html)
+
+A lottery-ticket simulator, play money only. Buy tickets in whatever quantity you like,
+then watch a real drawing: 5 numbers from 1-69 plus one "red ball" from 1-26, matching the
+format (and the real published odds) of a well-known multi-state drawing game. This
+project is not affiliated with or endorsed by any lottery operator — there are no real
+tickets, no real drawings and no real prizes.
+
+### Features
+
+- Buy tickets in quick amounts (1, 5, 10, 25, 50), an exact quantity, or hit **Max** to
+  spend your whole balance
+- A real drawing every time: the odds for every prize tier come from combinatorics, not a
+  hardcoded table, and match the real game's published odds exactly (see Testing below)
+- A jackpot that grows every drawing nobody wins it, and resets after someone does
+- A built-in paytable showing every prize and its real odds
+- Session and lifetime statistics; going broke offers a fresh $100 to start over
+- Sound effects with a mute button, and a Paytable toggle
+
+### Rules
+
+- Tickets cost $2 each. Each one is quick-picked: 5 numbers from 1-69, plus one "red ball"
+  from 1-26.
+- Prizes range from $4 (matching just the red ball) up to $1,000,000 (matching all 5 white
+  numbers), and the jackpot — starting at $20,000,000 — for matching all 6.
+- The jackpot grows by $3,000,000 every drawing nobody wins it, and resets to $20,000,000
+  after a win.
+
+### How It's Built
+
+- `lottery-engine.js` — the drawing mechanics and odds. No browser code, so it can be
+  tested in plain Node; it reports what happens through events.
+- `lottery.js` — the page: renders the ticket kiosk, plays sounds, and keeps statistics,
+  all in reaction to the engine's events.
+- `lottery.html` and `lottery-styles.css` — the markup and styling.
+
+### Testing
+
+`lottery_verify.cjs` checks that the engine's odds match the real game's published odds
+exactly (down to the tier), plus the page wiring in a mocked browser, plus random-play
+fuzz tests that check no money is ever created or lost:
+
+```
+node lottery_verify.cjs
+```
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
