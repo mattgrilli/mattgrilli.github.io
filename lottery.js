@@ -176,6 +176,12 @@ class Kiosk {
             case 'ticketsCleared':
                 playSound(buySound);
                 break;
+            case 'numbersRevealed':
+                playSound(clickSound);
+                break;
+            case 'checkProgress':
+                this.updateCheckProgress(event.checked, event.total);
+                break;
             case 'drawResolved':
                 this.reportDraw(event);
                 break;
@@ -282,13 +288,50 @@ class Kiosk {
         this.updateUI();
     }
 
+    // Reveals the winning numbers only. Checking tickets against them is a separate,
+    // player-initiated step (see checkTickets), so a huge purchase never has to be
+    // evaluated all at once, and there's a moment to look at the numbers first.
     draw() {
-        const result = this.engine.draw();
+        const result = this.engine.revealDraw();
         if (!result.ok) {
             setMessage(result.reason === 'notickets' ? 'Buy at least one ticket first.' : 'The drawing is already in.');
             return;
         }
+        setMessage('The numbers are in. Click Check Tickets to see if you won.');
         this.updateUI();
+        this.updateCheckProgress(0, this.engine.tickets.length);
+    }
+
+    // Checks tickets in batches, paced with a short delay between them so the progress
+    // bar is actually visible instead of jumping straight to 100% - and so a huge number
+    // of tickets is never evaluated in one long synchronous block.
+    checkTickets() {
+        if (!this.engine.canCheck()) {
+            return;
+        }
+        const total = this.engine.tickets.length;
+        const batchSize = Math.max(50, Math.min(5000, Math.ceil(total / 20)));
+        document.getElementById('check-tickets-button').disabled = true;
+        this.updateCheckProgress(0, total);
+        const step = () => {
+            if (!this.engine.canCheck()) {
+                return; // finished - reportDraw (via the drawResolved event) already rendered the result
+            }
+            this.engine.checkBatch(batchSize);
+            if (this.engine.canCheck()) {
+                setTimeout(step, 20);
+            }
+        };
+        setTimeout(step, 20);
+    }
+
+    updateCheckProgress(checked, total) {
+        const pct = total > 0 ? Math.round((checked / total) * 100) : 0;
+        const bar = document.getElementById('check-progress');
+        bar.setAttribute('aria-valuenow', String(pct));
+        document.getElementById('check-progress-fill').style.width = `${pct}%`;
+        setText(document.getElementById('check-progress-label'),
+            `Checking... ${checked.toLocaleString('en-US')} / ${total.toLocaleString('en-US')} tickets`);
     }
 
     nextRound() {
@@ -321,10 +364,18 @@ class Kiosk {
         this.buildPaytable(); // the jackpot row's amount can have changed
     }
 
+    // The winning numbers are known as soon as they're revealed (phase 'checking'), even
+    // before any ticket has actually been checked against them.
+    numbersRevealed() {
+        return this.engine.phase === 'checking' || this.engine.phase === 'results';
+    }
+
     renderDrawnBalls() {
         const container = document.getElementById('drawn-balls');
-        const draw = this.engine.phase === 'results' ? this.engine.lastDraw : null;
-        const balls = draw ? [...draw.winningWhites.map(n => ({ n, red: false })), { n: draw.winningRed, red: true }] : [];
+        const revealed = this.numbersRevealed();
+        const balls = revealed
+            ? [...this.engine.winningWhites.map(n => ({ n, red: false })), { n: this.engine.winningRed, red: true }]
+            : [];
         syncChildren(container, balls,
             (ball, index) => `${index}:${ball.n}:${ball.red}`,
             (ball, index) => this.buildBall(ball, index));
@@ -357,12 +408,13 @@ class Kiosk {
             ? `You have ${engine.tickets.length} ${noun} in this drawing.`
             : `${engine.tickets.length} ${noun} played.`);
 
-        const draw = engine.phase === 'results' ? engine.lastDraw : null;
+        const winningWhites = this.numbersRevealed() ? engine.winningWhites : null;
+        const winningRed = this.numbersRevealed() ? engine.winningRed : null;
         const shown = engine.tickets.slice(0, MAX_TICKET_ROWS);
         syncChildren(list, shown,
             (ticket, index) => `${index}:${ticket.whites.join(',')}:${ticket.red}`,
             () => this.buildTicketRow(),
-            (row, ticket, index) => this.updateTicketRow(row, ticket, index, draw));
+            (row, ticket, index) => this.updateTicketRow(row, ticket, index, winningWhites, winningRed));
 
         const hiddenCount = engine.tickets.length - shown.length;
         setText(document.getElementById('ticket-list-note'),
@@ -382,10 +434,9 @@ class Kiosk {
         return row;
     }
 
-    updateTicketRow(row, ticket, index, draw) {
+    updateTicketRow(row, ticket, index, winningWhites, winningRed) {
         setText(row.parts.label, `#${index + 1}`);
-        const winningWhites = draw ? draw.winningWhites : [];
-        const winningRed = draw ? draw.winningRed : null;
+        winningWhites = winningWhites || [];
         const numbers = [...ticket.whites.map(n => ({ n, red: false })), { n: ticket.red, red: true }];
         clearChildren(row.parts.balls);
         numbers.forEach(({ n, red }) => {
@@ -501,6 +552,7 @@ class Kiosk {
         document.getElementById('restart').style.display = engine.isBroke() ? 'inline-block' : 'none';
         document.getElementById('bankroll-amount').disabled = !engine.canSetBalance();
         document.getElementById('set-bankroll').disabled = !engine.canSetBalance();
+        document.getElementById('check-tickets-button').disabled = !engine.canCheck();
     }
 
     buildPaytable() {
@@ -549,6 +601,7 @@ updateStatsDisplay();
 document.getElementById('toggle-paytable').addEventListener('click', () => kiosk.togglePaytable());
 document.getElementById('clear-tickets').addEventListener('click', () => kiosk.clearTickets());
 document.getElementById('draw-button').addEventListener('click', () => kiosk.draw());
+document.getElementById('check-tickets-button').addEventListener('click', () => kiosk.checkTickets());
 document.getElementById('next-round').addEventListener('click', () => kiosk.nextRound());
 document.getElementById('restart').addEventListener('click', () => kiosk.restart());
 
@@ -586,6 +639,8 @@ document.addEventListener('keydown', event => {
     }
     if (engine.phase === 'buying' && event.key === 'Enter' && engine.canDraw()) {
         kiosk.draw();
+    } else if (engine.phase === 'checking' && event.key === 'Enter' && engine.canCheck()) {
+        kiosk.checkTickets();
     } else if (engine.phase === 'results' && event.key === 'Enter') {
         kiosk.nextRound();
     }

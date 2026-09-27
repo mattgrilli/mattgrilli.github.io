@@ -80,6 +80,119 @@ test('Engine: outcomesFor sums to the total across every match count', () => {
 // Part 2: the engine's behaviour
 // =====================================================================
 
+test('Engine: revealDraw shows the numbers without checking any tickets yet', () => {
+  const e = new LotteryEngine();
+  e.buyTickets(3);
+  const events = record(e);
+  assert.equal(e.revealDraw({ whites: [1, 2, 3, 4, 5], red: 1 }).ok, true);
+  assert.equal(e.phase, 'checking');
+  assert.deepEqual(e.winningWhites, [1, 2, 3, 4, 5]);
+  assert.equal(e.winningRed, 1);
+  assert.equal(e.checkedResults.length, 0);
+  assert.equal(e.lastDraw, null); // nothing has settled yet
+  assert.equal(e.balance, 94); // just the cost of the tickets, no winnings yet
+  assert.equal(events.find(ev => ev.type === 'numbersRevealed') !== undefined, true);
+  assert.equal(e.canDraw(), false); // can't draw again mid-check
+  assert.equal(e.canBuy(1), false);
+});
+
+test('Engine: checkBatch processes tickets incrementally and settles once all are checked', () => {
+  const e = new LotteryEngine();
+  for (let i = 0; i < 10; i++) e.buyTickets(1);
+  e.tickets.forEach(t => { t.whites = [60, 61, 62, 63, 64]; t.red = 25; }); // guaranteed losers
+  const events = record(e);
+  e.revealDraw({ whites: [1, 2, 3, 4, 5], red: 1 });
+  assert.equal(e.canCheck(), true);
+  assert.equal(e.ticketsLeftToCheck(), 10);
+
+  e.checkBatch(4);
+  assert.equal(e.checkedResults.length, 4);
+  assert.equal(e.ticketsLeftToCheck(), 6);
+  assert.equal(e.phase, 'checking'); // not settled yet
+  assert.equal(e.canCheck(), true);
+  const progress = events.filter(ev => ev.type === 'checkProgress');
+  assert.equal(progress.length, 1);
+  assert.deepEqual([progress[0].checked, progress[0].total], [4, 10]);
+
+  e.checkBatch(4);
+  assert.equal(e.ticketsLeftToCheck(), 2);
+  assert.equal(e.phase, 'checking');
+
+  e.checkBatch(100); // asking for more than remain finishes it off
+  assert.equal(e.checkedResults.length, 10);
+  assert.equal(e.phase, 'results');
+  assert.equal(e.canCheck(), false);
+  assert.equal(events.some(ev => ev.type === 'drawResolved'), true);
+  assert.equal(e.lastDraw.results.length, 10);
+});
+
+test('Engine: checkBatch is locked outside the checking phase', () => {
+  const e = new LotteryEngine();
+  assert.equal(e.checkBatch(10).reason, 'locked'); // still buying, nothing revealed
+  e.buyTickets(1);
+  e.draw({ whites: [1, 2, 3, 4, 5], red: 1 }); // reveals and checks in one call
+  assert.equal(e.phase, 'results');
+  assert.equal(e.checkBatch(10).reason, 'locked'); // already fully checked
+});
+
+test('Engine: draw() (the one-call convenience) gives the same result as revealDraw + checkBatch', () => {
+  const stepwise = new LotteryEngine();
+  stepwise.buyTickets(5);
+  stepwise.tickets.forEach(t => { t.whites = [1, 2, 3, 4, 6]; t.red = 1; });
+  stepwise.revealDraw({ whites: [1, 2, 3, 4, 5], red: 1 });
+  while (stepwise.canCheck()) stepwise.checkBatch(2);
+
+  const oneCall = new LotteryEngine();
+  oneCall.buyTickets(5);
+  oneCall.tickets.forEach(t => { t.whites = [1, 2, 3, 4, 6]; t.red = 1; });
+  oneCall.draw({ whites: [1, 2, 3, 4, 5], red: 1 });
+
+  assert.equal(stepwise.balance, oneCall.balance);
+  assert.equal(stepwise.phase, oneCall.phase);
+  assert.deepEqual(stepwise.lastDraw.results.map(r => r.prize), oneCall.lastDraw.results.map(r => r.prize));
+});
+
+test('Engine: a huge number of tickets does not overflow the call stack computing the biggest win', () => {
+  const e = new LotteryEngine({ startingBalance: 2_000_000 });
+  e.buyTickets(500_000);
+  e.tickets.forEach(t => { t.whites = [60, 61, 62, 63, 64]; t.red = 25; }); // all guaranteed losers
+  e.tickets[123].whites = [1, 2, 3, 4, 6]; // one match4 winner: $100
+  assert.doesNotThrow(() => e.draw({ whites: [1, 2, 3, 4, 5], red: 9 }));
+  assert.equal(e.lastDraw.totalWon, 100);
+  assert.equal(e.stats.biggestWin, 100);
+});
+
+test('Engine: isBroke stays false mid-check even at $0, and going broke is detected once settled', () => {
+  const e = new LotteryEngine({ startingBalance: 2 });
+  e.buyTickets(1);
+  e.tickets[0] = { whites: [1, 2, 3, 4, 5], red: 1 }; // guaranteed not to match
+  e.revealDraw({ whites: [60, 61, 62, 63, 64], red: 25 });
+  assert.equal(e.balance, 0);
+  assert.equal(e.isBroke(), false); // still mid-check, nothing has settled
+  e.checkBatch(1);
+  assert.equal(e.phase, 'results');
+  assert.equal(e.isBroke(), true);
+});
+
+test('Engine: revealed numbers are cleared between rounds and on restart', () => {
+  const e = new LotteryEngine({ startingBalance: 2 });
+  e.buyTickets(1);
+  e.draw({ whites: [1, 2, 3, 4, 5], red: 1 });
+  e.nextRound();
+  assert.equal(e.winningWhites, null);
+  assert.equal(e.winningRed, null);
+  assert.equal(e.checkedResults.length, 0);
+
+  const broke = new LotteryEngine({ startingBalance: 2 });
+  broke.buyTickets(1);
+  broke.tickets[0] = { whites: [1, 2, 3, 4, 5], red: 1 }; // guaranteed not to match
+  broke.draw({ whites: [60, 61, 62, 63, 64], red: 25 });
+  assert.equal(broke.isBroke(), true);
+  broke.restart();
+  assert.equal(broke.winningWhites, null);
+  assert.equal(broke.winningRed, null);
+});
+
 test('Engine: the player can set their own starting balance before buying anything', () => {
   const e = new LotteryEngine({ startingBalance: 100 });
   assert.equal(e.canSetBalance(), true);
@@ -474,6 +587,63 @@ function forcedDraw(env, whites, red) {
   return env.engine.draw({ whites, red });
 }
 
+test('Page: Draw reveals the numbers without checking tickets; Check Tickets does the rest', () => {
+  const env = makeEnvironment();
+  env.kiosk.buy(3);
+  env.kiosk.draw();
+  assert.equal(env.node('game-container').dataset.phase, 'checking');
+  assert.equal(env.node('drawn-balls').children.length, 6); // numbers are already shown
+  assert.match(env.node('message').textContent, /Check Tickets/);
+  assert.equal(env.node('check-tickets-button').disabled, false);
+  // tickets are visible with numbers, but nothing has been checked or paid out yet
+  assert.equal(env.getSession().totalWon, 0);
+  assert.equal(env.node('draw-button').disabled, true); // can't draw again mid-check
+
+  env.kiosk.checkTickets();
+  env.flushTimers();
+  assert.equal(env.node('game-container').dataset.phase, 'results');
+  assert.equal(env.node('check-tickets-button').disabled, true);
+});
+
+test('Page: the progress bar advances in batches while checking a large purchase', () => {
+  const env = makeEnvironment();
+  env.engine.balance = 100000;
+  env.kiosk.buy(1000);
+  env.kiosk.draw();
+  assert.equal(env.node('check-progress').getAttribute('aria-valuenow'), '0');
+  env.kiosk.checkTickets();
+  // the first batch has been scheduled but not yet run
+  assert.equal(env.engine.phase, 'checking');
+  env.flushTimers();
+  assert.equal(env.engine.phase, 'results');
+  assert.equal(env.node('check-progress').getAttribute('aria-valuenow'), '100');
+  assert.match(env.node('check-progress-label').textContent, /1,000 \/ 1,000/);
+});
+
+test('Page: winning tickets highlight as soon as numbers are revealed, before checking', () => {
+  const env = makeEnvironment();
+  env.kiosk.buy(1);
+  env.engine.tickets[0] = { whites: [1, 2, 60, 61, 62], red: 9 };
+  env.engine.revealDraw({ whites: [1, 2, 3, 4, 5], red: 1 });
+  env.kiosk.updateUI();
+  const row = env.node('ticket-list').children[0];
+  const minis = row.parts.balls.children;
+  assert.deepEqual(minis.map(m => m.classList.contains('hit')), [true, true, false, false, false, false]);
+  // but nothing has actually been paid out yet
+  assert.equal(env.engine.balance, 98);
+});
+
+test('Page: cannot buy, clear tickets or set the bankroll while checking', () => {
+  const env = makeEnvironment();
+  env.kiosk.buy(1);
+  env.kiosk.draw();
+  assert.equal(env.kiosk.buy(1), false);
+  env.kiosk.clearTickets(); // must refuse silently, not clear the ticket
+  assert.equal(env.engine.tickets.length, 1);
+  assert.equal(env.node('quantity-amount').disabled, true);
+  assert.equal(env.node('bankroll-amount').disabled, true);
+});
+
 test('Page: setting the starting balance updates the balance and the restart amount', () => {
   const env = makeEnvironment();
   assert.equal(env.node('bankroll-amount').disabled, false);
@@ -796,6 +966,9 @@ test('Page: pressing Enter draws while buying (with tickets) and plays again aft
   env.kiosk.buy(1);
   assert.equal(env.engine.canDraw(), true);
   env.kiosk.draw();
+  assert.equal(env.engine.phase, 'checking');
+  env.kiosk.checkTickets();
+  env.flushTimers();
   assert.equal(env.engine.phase, 'results');
   env.kiosk.nextRound();
   assert.equal(env.engine.phase, 'buying');
@@ -813,6 +986,9 @@ test('Page: fuzz - 300 random rounds keep the page and the engine in agreement',
       k.buy(1 + Math.floor(Math.random() * Math.max(1, Math.min(5, e.maxAffordable()))));
     }
     k.draw();
+    assert.equal(e.phase, 'checking');
+    k.checkTickets();
+    env.flushTimers();
     assert.equal(e.phase, 'results');
     assert.equal(env.node('drawn-balls').children.length, 6, `round ${round}: balls on screen`);
     assert.equal(env.node('ticket-list').children.length, e.tickets.length, `round ${round}: ticket rows on screen`);

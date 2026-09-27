@@ -112,6 +112,9 @@ bar, so it's easy to switch between them.
   go broke and start over
 - Buy tickets in quick amounts (1, 5, 10, 25, 50), an exact quantity, or hit **Max** to
   spend your whole balance
+- Drawing is two steps: **Draw** reveals the winning numbers, then **Check Tickets**
+  checks them against your tickets, with its own progress bar &mdash; useful for actually
+  watching a huge batch get checked, not just waiting on a frozen page
 - A real drawing every time: the odds for every prize tier come from combinatorics, not a
   hardcoded table, and match the real game's published odds exactly (see Testing below)
 - A jackpot that grows every drawing nobody wins it, and resets after someone does

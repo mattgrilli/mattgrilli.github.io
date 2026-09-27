@@ -105,7 +105,10 @@ class LotteryEngine {
         this.jackpot = BASE_JACKPOT;
         this.phase = 'buying'; // 'buying' | 'results'
         this.tickets = [];     // tickets bought for the round in progress
-        this.lastDraw = null;  // set by draw(): { winningWhites, winningRed, results, totalWon, jackpotWon, jackpotBefore }
+        this.winningWhites = null; // set by revealDraw(), before tickets are checked
+        this.winningRed = null;
+        this.checkedResults = []; // filled in gradually by checkBatch() during 'checking'
+        this.lastDraw = null;  // set once checking finishes: { winningWhites, winningRed, results, totalWon, jackpotWon, jackpotBefore }
         this.stats = { drawsPlayed: 0, ticketsBought: 0, totalSpent: 0, totalWon: 0, biggestWin: 0 };
         this.listeners = [];
     }
@@ -217,25 +220,65 @@ class LotteryEngine {
         return 1 + Math.floor(this.rng() * RED_COUNT);
     }
 
-    // ---- The drawing ----
+    // ---- The drawing: revealing the winning numbers, then checking tickets ----
+    //
+    // These are two separate steps so a page can show the numbers first (the dramatic
+    // moment) and let the player check their tickets separately - and so checking a huge
+    // number of tickets can be paced in batches with a progress bar, rather than done in
+    // one long synchronous call. draw() below does both steps at once, for a test (or a
+    // page) that just wants the end result.
 
     canDraw() {
         return this.phase === 'buying' && this.tickets.length > 0;
     }
 
-    // `forced` optionally fixes the winning numbers ({ whites, red }) - only ever passed
-    // by tests; the page never calls it, so every real drawing is truly random.
-    draw(forced = null) {
+    // Reveals the winning numbers only; tickets aren't checked against them yet (see
+    // checkBatch). `forced` optionally fixes the winning numbers ({ whites, red }) - only
+    // ever passed by tests; the page never calls it, so every real drawing is random.
+    revealDraw(forced = null) {
         if (this.phase !== 'buying') {
             return fail('locked');
         }
         if (this.tickets.length === 0) {
             return fail('notickets');
         }
-        const winningWhites = forced && forced.whites ? [...forced.whites].sort((a, b) => a - b) : this.drawWhites();
-        const winningRed = forced && forced.red ? forced.red : this.drawRed();
+        this.winningWhites = forced && forced.whites ? [...forced.whites].sort((a, b) => a - b) : this.drawWhites();
+        this.winningRed = forced && forced.red ? forced.red : this.drawRed();
+        this.checkedResults = [];
+        this.setPhase('checking');
+        this.emit('numbersRevealed', { winningWhites: this.winningWhites, winningRed: this.winningRed });
+        return ok();
+    }
 
-        const results = this.tickets.map(ticket => this.evaluateTicket(ticket, winningWhites, winningRed));
+    canCheck() {
+        return this.phase === 'checking' && this.checkedResults.length < this.tickets.length;
+    }
+
+    ticketsLeftToCheck() {
+        return this.phase === 'checking' ? this.tickets.length - this.checkedResults.length : 0;
+    }
+
+    // Checks up to `batchSize` more tickets against the already-revealed winning numbers.
+    // Once every ticket has been checked, the round settles automatically (finishChecking)
+    // and 'drawResolved' fires, exactly as it did before this was split into two steps.
+    checkBatch(batchSize) {
+        if (!this.canCheck()) {
+            return fail('locked');
+        }
+        const start = this.checkedResults.length;
+        const end = Math.min(start + batchSize, this.tickets.length);
+        for (let i = start; i < end; i++) {
+            this.checkedResults.push(this.evaluateTicket(this.tickets[i], this.winningWhites, this.winningRed));
+        }
+        this.emit('checkProgress', { checked: this.checkedResults.length, total: this.tickets.length });
+        if (this.checkedResults.length >= this.tickets.length) {
+            this.finishChecking();
+        }
+        return ok();
+    }
+
+    finishChecking() {
+        const results = this.checkedResults;
         const totalWon = results.reduce((sum, r) => sum + r.prize, 0);
         const jackpotWon = results.some(r => r.tier === 'jackpot');
         const jackpotBefore = this.jackpot;
@@ -243,12 +286,28 @@ class LotteryEngine {
         this.balance += totalWon;
         this.stats.drawsPlayed += 1;
         this.stats.totalWon += totalWon;
-        this.stats.biggestWin = Math.max(this.stats.biggestWin, ...results.map(r => r.prize));
+        // A plain loop, not Math.max(...results.map(...)): spreading hundreds of
+        // thousands of arguments into a function call overflows the stack.
+        for (const result of results) {
+            if (result.prize > this.stats.biggestWin) {
+                this.stats.biggestWin = result.prize;
+            }
+        }
         this.jackpot = jackpotWon ? BASE_JACKPOT : this.jackpot + JACKPOT_INCREMENT;
 
-        this.lastDraw = { winningWhites, winningRed, results, totalWon, jackpotWon, jackpotBefore, jackpotAfter: this.jackpot };
+        this.lastDraw = { winningWhites: this.winningWhites, winningRed: this.winningRed, results, totalWon, jackpotWon, jackpotBefore, jackpotAfter: this.jackpot };
         this.setPhase('results');
         this.emit('drawResolved', this.lastDraw);
+    }
+
+    // Convenience: reveals the numbers and checks every ticket in one synchronous call.
+    // Used by tests, and by anything that doesn't need the paced, two-step flow.
+    draw(forced = null) {
+        const started = this.revealDraw(forced);
+        if (!started.ok) {
+            return started;
+        }
+        this.checkBatch(this.tickets.length);
         return { ...ok(), draw: this.lastDraw };
     }
 
@@ -268,6 +327,9 @@ class LotteryEngine {
         }
         this.tickets = [];
         this.lastDraw = null;
+        this.winningWhites = null;
+        this.winningRed = null;
+        this.checkedResults = [];
         this.setPhase('buying');
         return true;
     }
@@ -291,6 +353,9 @@ class LotteryEngine {
         this.jackpot = BASE_JACKPOT;
         this.tickets = [];
         this.lastDraw = null;
+        this.winningWhites = null;
+        this.winningRed = null;
+        this.checkedResults = [];
         this.stats = { drawsPlayed: 0, ticketsBought: 0, totalSpent: 0, totalWon: 0, biggestWin: 0 };
         this.setPhase('buying');
         return true;

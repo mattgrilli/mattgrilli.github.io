@@ -558,8 +558,41 @@ button:focus-visible, .chip:focus-visible, #quantity-amount:focus-visible {
 }
 
 #game-container[data-phase="buying"] #buy-dock,
+#game-container[data-phase="checking"] #checking-dock,
 #game-container[data-phase="results"] #results-dock {
     display: flex;
+}
+
+#check-progress {
+    width: 100%;
+    max-width: 420px;
+    height: 18px;
+    box-sizing: border-box;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 999px;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35);
+}
+
+#check-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #ffe57a, #f2bf10);
+    border-radius: 999px;
+    transition: width 0.15s ease-out;
+}
+
+#check-progress-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+#check-tickets-button:disabled {
+    color: rgba(255, 255, 255, 0.6);
+    background: linear-gradient(#8b9892, #6f7c76);
+    box-shadow: none;
 }
 
 #bankroll-controls, #quantity-container, #buy-controls {
