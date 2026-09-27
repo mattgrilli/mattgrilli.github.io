@@ -267,6 +267,7 @@ class Kiosk {
     buyFailureMessage(reason) {
         if (reason === 'insufficient') return 'Not enough balance for that many tickets.';
         if (reason === 'invalid') return 'Enter a whole number of tickets, at least 1.';
+        if (reason === 'toomany') return `You can hold at most ${LotteryEngine.MAX_TICKETS_PER_ROUND.toLocaleString('en-US')} tickets in one drawing.`;
         return 'Tickets are locked once the drawing is in.';
     }
 

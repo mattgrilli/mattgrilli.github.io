@@ -19,6 +19,7 @@ const WHITE_PICK = 5;
 const RED_COUNT = 26;
 const BASE_JACKPOT = 20_000_000;
 const JACKPOT_INCREMENT = 3_000_000; // added to the jackpot after a drawing with no jackpot winner
+const MAX_TICKETS_PER_ROUND = 1_000_000; // a hard cap; see canBuy() for why
 
 // n-choose-r. Every value used here is small enough (n <= 69) to stay well within
 // float precision, so a straightforward running product is exact once rounded.
@@ -154,15 +155,29 @@ class LotteryEngine {
 
     // ---- Buying tickets ----
 
+    // A hard ceiling on tickets held per round, independent of how much money the player
+    // has. Generating a ticket (5 random numbers) is cheap, but not free: at a few hundred
+    // thousand tickets, one synchronous buy already takes a noticeable fraction of a
+    // second, and there is nothing stopping a player from setting an enormous bankroll
+    // and asking for tens or hundreds of millions of tickets in one purchase, which would
+    // hang or crash the page well before it ever got to rendering anything. A cap this
+    // high still costs $2,000,000 to reach and is far more than enough to demonstrate how
+    // little even that buys against these odds.
     canBuy(quantity) {
         return this.phase === 'buying' &&
                Number.isInteger(quantity) && quantity >= 1 &&
-               this.balance >= quantity * this.ticketPrice;
+               this.balance >= quantity * this.ticketPrice &&
+               this.tickets.length + quantity <= MAX_TICKETS_PER_ROUND;
     }
 
     // The most tickets the player could buy right now (for a "Max" button), at least 0.
     maxAffordable() {
-        return this.phase === 'buying' ? Math.floor(this.balance / this.ticketPrice) : 0;
+        if (this.phase !== 'buying') {
+            return 0;
+        }
+        const affordable = Math.floor(this.balance / this.ticketPrice);
+        const roomLeft = MAX_TICKETS_PER_ROUND - this.tickets.length;
+        return Math.max(0, Math.min(affordable, roomLeft));
     }
 
     buyTickets(quantity) {
@@ -171,6 +186,9 @@ class LotteryEngine {
         }
         if (!Number.isInteger(quantity) || quantity < 1) {
             return fail('invalid');
+        }
+        if (this.tickets.length + quantity > MAX_TICKETS_PER_ROUND) {
+            return fail('toomany');
         }
         if (!this.canBuy(quantity)) {
             return fail('insufficient');
@@ -206,12 +224,24 @@ class LotteryEngine {
         return { whites: this.drawWhites(), red: this.drawRed() };
     }
 
+    // A partial Fisher-Yates draw over a pool reused across calls (not rebuilt each time)
+    // with swap-based removal (O(1), not the O(n) shift a splice-based removal costs) -
+    // this matters once buying tickets by the hundred thousand or million.
     drawWhites() {
-        const pool = Array.from({ length: WHITE_COUNT }, (_, i) => i + 1);
-        const picks = [];
+        if (!this._whitePool) {
+            this._whitePool = new Array(WHITE_COUNT);
+        }
+        const pool = this._whitePool;
+        for (let i = 0; i < WHITE_COUNT; i++) {
+            pool[i] = i + 1;
+        }
+        const picks = new Array(WHITE_PICK);
+        let remaining = WHITE_COUNT;
         for (let i = 0; i < WHITE_PICK; i++) {
-            const index = Math.floor(this.rng() * pool.length);
-            picks.push(pool.splice(index, 1)[0]);
+            const index = Math.floor(this.rng() * remaining);
+            picks[i] = pool[index];
+            remaining--;
+            pool[index] = pool[remaining];
         }
         return picks.sort((a, b) => a - b);
     }
@@ -369,6 +399,7 @@ LotteryEngine.WHITE_PICK = WHITE_PICK;
 LotteryEngine.RED_COUNT = RED_COUNT;
 LotteryEngine.BASE_JACKPOT = BASE_JACKPOT;
 LotteryEngine.JACKPOT_INCREMENT = JACKPOT_INCREMENT;
+LotteryEngine.MAX_TICKETS_PER_ROUND = MAX_TICKETS_PER_ROUND;
 LotteryEngine.TIERS = TIERS;
 
 if (typeof module !== 'undefined' && module.exports) {

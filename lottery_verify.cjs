@@ -230,6 +230,37 @@ test('Engine: a chosen balance survives going broke and restarting', () => {
   assert.equal(e.balance, 6); // back to the chosen $6, not the original $100
 });
 
+test('Engine: an absurdly large purchase is refused instantly instead of hanging or crashing', () => {
+  const e = new LotteryEngine({ startingBalance: 300_000_000 });
+  const t0 = Date.now();
+  const result = e.buyTickets(100_000_000);
+  const elapsed = Date.now() - t0;
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'toomany');
+  assert.equal(e.tickets.length, 0);
+  assert.equal(e.balance, 300_000_000); // untouched
+  assert.ok(elapsed < 50, `refusal took ${elapsed}ms - should be instant`);
+});
+
+test('Engine: tickets are capped per round regardless of how much money is available', () => {
+  const e = new LotteryEngine({ startingBalance: 10_000_000 });
+  assert.equal(e.maxAffordable(), LotteryEngine.MAX_TICKETS_PER_ROUND);
+  assert.equal(e.buyTickets(LotteryEngine.MAX_TICKETS_PER_ROUND + 1).reason, 'toomany');
+  assert.equal(e.buyTickets(LotteryEngine.MAX_TICKETS_PER_ROUND).ok, true); // exactly at the cap is fine
+  assert.equal(e.tickets.length, LotteryEngine.MAX_TICKETS_PER_ROUND);
+  assert.equal(e.maxAffordable(), 0); // no room left, regardless of remaining balance
+  assert.equal(e.buyTickets(1).reason, 'toomany');
+});
+
+test('Engine: the cap applies across multiple purchases in the same round, not just one', () => {
+  const e = new LotteryEngine({ startingBalance: 10_000_000 });
+  e.buyTickets(LotteryEngine.MAX_TICKETS_PER_ROUND - 5);
+  assert.equal(e.maxAffordable(), 5);
+  assert.equal(e.buyTickets(10).reason, 'toomany'); // would push it over
+  assert.equal(e.buyTickets(5).ok, true); // exactly fills the remaining room
+  assert.equal(e.tickets.length, LotteryEngine.MAX_TICKETS_PER_ROUND);
+});
+
 test('Engine: buying tickets deducts the cost and records the purchase', () => {
   const e = new LotteryEngine({ startingBalance: 100 });
   const events = record(e);
@@ -302,13 +333,29 @@ test('Engine: a drawing produces 5 unique whites 1-69 and one red 1-26', () => {
   assert.deepEqual(draw.winningWhites, [...draw.winningWhites].sort((a, b) => a - b));
 });
 
-test('Engine: white numbers can reach both the low (1) and high (69) end', () => {
-  const lowEngine = new LotteryEngine({ rng: () => 0 }); // always pick index 0 of what remains
-  assert.deepEqual(lowEngine.drawWhites(), [1, 2, 3, 4, 5]);
-  const highEngine = new LotteryEngine({ rng: () => 0.999999 }); // always pick the last remaining index
-  assert.deepEqual(highEngine.drawWhites(), [65, 66, 67, 68, 69]);
-  assert.equal(new LotteryEngine({ rng: () => 0 }).drawRed(), 1);
-  assert.equal(new LotteryEngine({ rng: () => 0.999999 }).drawRed(), 26);
+test('Engine: white numbers can reach both the low (1) and high (69) end, and are always unique', () => {
+  const e = new LotteryEngine();
+  let sawOne = false;
+  let sawSixtyNine = false;
+  let sawRedOne = false;
+  let sawRedTwentySix = false;
+  for (let i = 0; i < 2000; i++) {
+    const whites = e.drawWhites();
+    assert.equal(whites.length, 5);
+    assert.equal(new Set(whites).size, 5); // no duplicate numbers
+    whites.forEach(n => assert.ok(n >= 1 && n <= 69, `out of range: ${n}`));
+    assert.deepEqual(whites, [...whites].sort((a, b) => a - b));
+    if (whites.includes(1)) sawOne = true;
+    if (whites.includes(69)) sawSixtyNine = true;
+    const red = e.drawRed();
+    assert.ok(red >= 1 && red <= 26);
+    if (red === 1) sawRedOne = true;
+    if (red === 26) sawRedTwentySix = true;
+  }
+  assert.ok(sawOne, '1 was never drawn in 2000 tries');
+  assert.ok(sawSixtyNine, '69 was never drawn in 2000 tries');
+  assert.ok(sawRedOne, 'red 1 was never drawn in 2000 tries');
+  assert.ok(sawRedTwentySix, 'red 26 was never drawn in 2000 tries');
 });
 
 test('Engine: cannot draw with no tickets, and drawing is locked afterwards', () => {
@@ -642,6 +689,23 @@ test('Page: cannot buy, clear tickets or set the bankroll while checking', () =>
   assert.equal(env.engine.tickets.length, 1);
   assert.equal(env.node('quantity-amount').disabled, true);
   assert.equal(env.node('bankroll-amount').disabled, true);
+});
+
+test('Page: buying past the ticket cap shows a clear message and buys nothing', () => {
+  const env = makeEnvironment();
+  env.engine.balance = 300_000_000;
+  assert.equal(env.kiosk.buy(100_000_000), false);
+  assert.match(env.node('message').textContent, /at most 1,000,000 tickets/);
+  assert.equal(env.engine.tickets.length, 0);
+  assert.equal(env.engine.balance, 300_000_000);
+});
+
+test('Page: the Max chip never buys past the cap even with an enormous balance', () => {
+  const env = makeEnvironment();
+  env.engine.balance = 300_000_000;
+  env.kiosk.buyMax();
+  assert.equal(env.engine.tickets.length, LotteryEngine.MAX_TICKETS_PER_ROUND);
+  assert.equal(env.engine.balance, 300_000_000 - LotteryEngine.MAX_TICKETS_PER_ROUND * 2);
 });
 
 test('Page: setting the starting balance updates the balance and the restart amount', () => {

@@ -123,6 +123,8 @@ bar, so it's easy to switch between them.
 - Sound effects with a mute button, and a Paytable toggle
 - Buy (or win with) thousands of tickets at once without the page freezing &mdash; every
   number stays exact, only the detailed per-ticket list is capped for display
+- A hard cap of 1,000,000 tickets per drawing (still $2,000,000 to reach) keeps ticket
+  generation itself fast and the tab from running out of memory on an unreasonable request
 
 ### Rules
 
