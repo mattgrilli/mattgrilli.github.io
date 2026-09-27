@@ -55,6 +55,7 @@
                 <div id="ticket-list-note"></div>
             </details>
             <div id="winners-list"></div>
+            <div id="fastforward-summary" hidden></div>
         </div>
 
         <div id="dock">
@@ -71,6 +72,21 @@
                     <button id="buy-custom">Buy</button>
                     <button id="draw-button">Draw</button>
                 </div>
+                <div id="fastforward-controls">
+                    <label for="ff-drawings">Simulate</label>
+                    <input type="number" id="ff-drawings" min="1" step="1" value="100" inputmode="numeric" aria-label="Number of drawings to simulate">
+                    <label for="ff-tickets">drawings, buying</label>
+                    <input type="number" id="ff-tickets" min="1" step="1" value="10" inputmode="numeric" aria-label="Tickets to buy each drawing">
+                    <label for="ff-tickets">tickets each</label>
+                    <button id="fast-forward-button">Run</button>
+                </div>
+            </div>
+            <div id="fastforward-dock" class="dock-panel">
+                <div id="ff-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                    <div id="ff-progress-fill"></div>
+                </div>
+                <div id="ff-progress-label"></div>
+                <button id="ff-stop-button">Stop</button>
             </div>
             <div id="checking-dock" class="dock-panel">
                 <div id="check-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">

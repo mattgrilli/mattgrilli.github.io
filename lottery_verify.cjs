@@ -625,9 +625,24 @@ function makeEnvironment(savedStats = null, { storageThrows = false, presets = {
       timer.fn();
     }
   }
+  // Runs exactly the next `n` due timers (rather than draining the whole queue), so a
+  // test can inspect state between two chunks of a paced loop instead of only before and
+  // after the whole thing runs. Returns how many were actually run (fewer than `n` if the
+  // queue emptied first).
+  function stepTimers(n = 1) {
+    let ran = 0;
+    while (ran < n && timers.length) {
+      timers.sort((a, b) => a.time - b.time || a.id - b.id);
+      const timer = timers.shift();
+      now = timer.time;
+      timer.fn();
+      ran++;
+    }
+    return ran;
+  }
   const source = fs.readFileSync(enginePath, 'utf8') + '\n' + fs.readFileSync(scriptPath, 'utf8');
   vm.runInContext(source + '\n;globalThis.pageExports = { engine, kiosk, getStats: () => ({...gameStats}), getSession: () => ({...sessionStats}), toggleMute, isMuted: () => soundMuted };', context, { filename: 'lottery-engine.js+lottery.js' });
-  return { ...context.pageExports, node, body: bodyEl, flushTimers, playLog, storage };
+  return { ...context.pageExports, node, body: bodyEl, flushTimers, stepTimers, playLog, storage };
 }
 
 function forcedDraw(env, whites, red) {
@@ -706,6 +721,102 @@ test('Page: the Max chip never buys past the cap even with an enormous balance',
   env.kiosk.buyMax();
   assert.equal(env.engine.tickets.length, LotteryEngine.MAX_TICKETS_PER_ROUND);
   assert.equal(env.engine.balance, 300_000_000 - LotteryEngine.MAX_TICKETS_PER_ROUND * 2);
+});
+
+test('Page: fast-forward runs N real drawings and produces correct accounting', () => {
+  const env = makeEnvironment();
+  env.engine.balance = 1_000_000;
+  assert.equal(env.kiosk.canFastForward(), true);
+  env.kiosk.runFastForward(50, 3);
+  assert.equal(env.node('game-container').dataset.fastforward, 'true');
+  assert.equal(env.node('fast-forward-button').disabled, true);
+  env.flushTimers();
+  assert.equal(env.node('game-container').dataset.fastforward, 'false');
+  assert.equal(env.engine.phase, 'buying');
+  assert.equal(env.engine.tickets.length, 0); // cleared after the last simulated round
+  assert.equal(env.getSession().drawsPlayed, 50);
+  assert.equal(env.getSession().ticketsBought, 150);
+  assert.equal(env.getSession().totalSpent, 300);
+  const net = env.getSession().totalWon - 300;
+  assert.equal(env.engine.balance, 1_000_000 + net);
+  assert.equal(env.node('fastforward-summary').hidden, false);
+  const summary1 = env.node('fastforward-summary');
+  assert.match(summary1.children[0].textContent, /Simulation complete/);
+  assert.match(summary1.children[1].innerHTML, /Drawings run: 50/);
+});
+
+test('Page: buying tickets afterward clears the fast-forward summary', () => {
+  const env = makeEnvironment();
+  env.kiosk.runFastForward(5, 1);
+  env.flushTimers();
+  assert.equal(env.node('fastforward-summary').hidden, false);
+  env.kiosk.buy(1);
+  assert.equal(env.node('fastforward-summary').hidden, true);
+});
+
+test('Page: normal buying, drawing and checking are disabled while fast-forwarding', () => {
+  const env = makeEnvironment();
+  env.engine.balance = 1_000_000;
+  env.kiosk.runFastForward(1000, 1);
+  assert.equal(env.kiosk.buy(1), false);
+  assert.equal(env.node('quantity-amount').disabled, true);
+  assert.equal(env.node('bankroll-amount').disabled, true);
+  env.flushTimers();
+});
+
+test('Page: rejects an invalid number of drawings or tickets per drawing', () => {
+  const env = makeEnvironment();
+  env.kiosk.runFastForward(0, 5);
+  assert.match(env.node('message').textContent, /1 to/);
+  assert.equal(env.node('game-container').dataset.fastforward, 'false');
+  env.kiosk.runFastForward(100_001, 5); // one past the fast-forward run-length cap
+  assert.match(env.node('message').textContent, /1 to/);
+  env.kiosk.runFastForward(10, 0);
+  assert.match(env.node('message').textContent, /tickets per drawing/);
+  env.kiosk.runFastForward(10, 1.5);
+  assert.match(env.node('message').textContent, /tickets per drawing/);
+});
+
+test('Page: stopping immediately runs zero drawings and reports it', () => {
+  const env = makeEnvironment();
+  env.engine.balance = 1_000_000;
+  env.kiosk.runFastForward(1000, 5);
+  env.kiosk.stopFastForward();
+  env.flushTimers();
+  assert.equal(env.node('game-container').dataset.fastforward, 'false');
+  assert.equal(env.getSession().drawsPlayed, 0);
+  const summary2 = env.node('fastforward-summary');
+  assert.match(summary2.children[0].textContent, /Stopped early/);
+  assert.match(summary2.children[1].innerHTML, /Drawings run: 0/);
+});
+
+test('Page: stopping between chunks halts the run partway through, not just at the start or the end', () => {
+  const env = makeEnvironment();
+  env.engine.balance = 100_000_000;
+  env.kiosk.runFastForward(100_000, 1); // enough rounds to guarantee more than one chunk
+  const ranOneChunk = env.stepTimers(1);
+  assert.equal(ranOneChunk, 1);
+  assert.equal(env.node('game-container').dataset.fastforward, 'true'); // the run isn't over
+  const drawingsSoFar = env.kiosk.ff.drawingsRun; // mid-run progress; session stats only update at the very end
+  assert.ok(drawingsSoFar > 0, 'expected at least one round to have run in the first chunk');
+  assert.ok(drawingsSoFar < 100_000, 'expected the first chunk not to finish the whole run');
+
+  env.kiosk.stopFastForward();
+  env.flushTimers();
+  assert.equal(env.node('game-container').dataset.fastforward, 'false');
+  assert.equal(env.getSession().drawsPlayed, drawingsSoFar); // no further rounds ran after Stop
+  assert.match(env.node('fastforward-summary').children[0].textContent, /Stopped early/);
+});
+
+test('Page: running out of money stops the simulation early and reports why', () => {
+  const env = makeEnvironment();
+  let callsLeft = 4;
+  env.engine.maxAffordable = () => (callsLeft-- > 0 ? 2 : 0); // deterministic: "money" for exactly 4 rounds
+  env.kiosk.runFastForward(1000, 2);
+  env.flushTimers();
+  assert.equal(env.getSession().drawsPlayed, 4);
+  assert.match(env.node('fastforward-summary').children[0].textContent, /Ran out of money/);
+  assert.match(env.node('message').textContent, /Simulated 4 drawings/);
 });
 
 test('Page: setting the starting balance updates the balance and the restart amount', () => {

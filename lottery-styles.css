@@ -563,7 +563,78 @@ button:focus-visible, .chip:focus-visible, #quantity-amount:focus-visible {
     display: flex;
 }
 
-#check-progress {
+/* While fast-forwarding, only its own dock shows, regardless of the underlying phase -
+   the player isn't meant to interact with individual rounds during a simulated run. */
+#game-container[data-fastforward="true"] #buy-dock,
+#game-container[data-fastforward="true"] #checking-dock,
+#game-container[data-fastforward="true"] #results-dock {
+    display: none !important;
+}
+
+#game-container[data-fastforward="true"] #fastforward-dock {
+    display: flex;
+}
+
+#fastforward-controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    padding-top: 10px;
+    margin-top: 2px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.75);
+    border-top: 1px dashed rgba(255, 255, 255, 0.15);
+}
+
+#fastforward-controls input {
+    width: 70px;
+    padding: 6px 8px;
+    box-sizing: border-box;
+    font: inherit;
+    font-size: 14px;
+    color: #1d1a10;
+    background: #ffffff;
+    border: none;
+    border-radius: 8px;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+#fast-forward-button {
+    padding: 8px 16px;
+    font-size: 14px;
+}
+
+#ff-progress-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+#ff-stop-button {
+    color: #ffffff;
+    background: linear-gradient(#ff6a4d, #d8391c);
+}
+
+#fastforward-summary {
+    margin-top: 8px;
+    padding: 10px 12px;
+    text-align: left;
+    font-size: 13px;
+    line-height: 1.6;
+    background: rgba(255, 213, 74, 0.08);
+    border: 1px solid rgba(255, 213, 74, 0.4);
+    border-radius: 10px;
+}
+
+#fastforward-summary h3 {
+    margin: 0 0 6px;
+    font-size: 14px;
+    color: var(--accent);
+}
+
+.progress-bar, #check-progress, #ff-progress {
     width: 100%;
     max-width: 420px;
     height: 18px;
@@ -575,7 +646,7 @@ button:focus-visible, .chip:focus-visible, #quantity-amount:focus-visible {
     box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35);
 }
 
-#check-progress-fill {
+.progress-fill, #check-progress-fill, #ff-progress-fill {
     height: 100%;
     width: 0%;
     background: linear-gradient(90deg, #ffe57a, #f2bf10);

@@ -156,19 +156,37 @@ const QUANTITIES = [1, 5, 10, 25, 50];
 const MAX_TICKET_ROWS = 300;
 const MAX_WINNER_ROWS = 200;
 
+// A UI-level cap on how many drawings a single fast-forward run can simulate. Each round
+// is already bounded by the engine's own per-round ticket cap; this just keeps a single
+// run's total length (and the time it takes, even though it never blocks the page) sane.
+const MAX_FASTFORWARD_DRAWINGS = 100_000;
+// How long a single chunk of simulated rounds may run before yielding back to the
+// browser, so the page (and the Stop button) stay responsive throughout a long run.
+const FASTFORWARD_CHUNK_BUDGET_MS = 20;
+
 class Kiosk {
     constructor(engine) {
         this.engine = engine;
+        this.fastForwarding = false; // true while a simulated run (see runFastForward) is active
         engine.subscribe(event => this.handleEvent(event));
         // The paytable starts hidden. The HTML already says so (a `hidden` attribute, so
         // there's no flash of it before this script runs), but setting it here too means
         // the page doesn't depend on that markup default for its actual behaviour.
         document.getElementById('paytable').hidden = true;
+        document.getElementById('game-container').dataset.fastforward = 'false';
         this.buildPaytable();
         this.updateUI();
     }
 
     handleEvent(event) {
+        // Fast-forwarding drives the engine directly and tracks its own totals (see
+        // runFastForward); reacting to every single simulated round's events here too
+        // would mean a sound and a full re-render per round, for possibly tens of
+        // thousands of rounds - noisy and slow for no benefit, since only the final
+        // summary is shown once the run finishes.
+        if (this.fastForwarding) {
+            return;
+        }
         switch (event.type) {
             case 'ticketsBought':
                 playSound(buySound);
@@ -235,6 +253,9 @@ class Kiosk {
     // ---- Bankroll ----
 
     setBankroll(amount) {
+        if (this.fastForwarding) {
+            return false;
+        }
         const result = this.engine.setBalance(amount);
         if (!result.ok) {
             if (result.reason === 'invalid') {
@@ -252,6 +273,9 @@ class Kiosk {
     // ---- Buying ----
 
     buy(quantity) {
+        if (this.fastForwarding) {
+            return false;
+        }
         const result = this.engine.buyTickets(quantity);
         if (!result.ok) {
             setMessage(this.buyFailureMessage(result.reason));
@@ -260,6 +284,7 @@ class Kiosk {
         // Tickets aren't recorded as spent until the drawing happens (see reportDraw):
         // Clear Tickets can still undo a purchase before then, with nothing to reverse.
         setMessage(`Bought ${quantity} ticket${quantity === 1 ? '' : 's'} for ${formatMoney(quantity * this.engine.ticketPrice)}.`);
+        document.getElementById('fastforward-summary').hidden = true; // clear a leftover summary once manual play resumes
         this.updateUI();
         return true;
     }
@@ -281,6 +306,9 @@ class Kiosk {
     }
 
     clearTickets() {
+        if (this.fastForwarding) {
+            return false;
+        }
         const result = this.engine.clearTickets();
         if (!result.ok) {
             return;
@@ -293,6 +321,9 @@ class Kiosk {
     // player-initiated step (see checkTickets), so a huge purchase never has to be
     // evaluated all at once, and there's a moment to look at the numbers first.
     draw() {
+        if (this.fastForwarding) {
+            return;
+        }
         const result = this.engine.revealDraw();
         if (!result.ok) {
             setMessage(result.reason === 'notickets' ? 'Buy at least one ticket first.' : 'The drawing is already in.');
@@ -307,6 +338,9 @@ class Kiosk {
     // bar is actually visible instead of jumping straight to 100% - and so a huge number
     // of tickets is never evaluated in one long synchronous block.
     checkTickets() {
+        if (this.fastForwarding) {
+            return;
+        }
         if (!this.engine.canCheck()) {
             return;
         }
@@ -336,6 +370,9 @@ class Kiosk {
     }
 
     nextRound() {
+        if (this.fastForwarding) {
+            return;
+        }
         if (this.engine.nextRound()) {
             setMessage('Buy your tickets for the next drawing.');
             this.updateUI();
@@ -343,10 +380,142 @@ class Kiosk {
     }
 
     restart() {
+        if (this.fastForwarding) {
+            return;
+        }
         if (this.engine.restart()) {
             setMessage(`New game. You start again with ${formatMoney(this.engine.startingBalance)}.`);
             this.updateUI();
         }
+    }
+
+    // ---- Fast-forward: simulate many real, independent drawings in a row ----
+    //
+    // Each simulated round is a genuine drawing - real random numbers, real odds, the
+    // jackpot rolling over exactly as it would one round at a time - just automated and
+    // unrendered until the run finishes, so hundreds or thousands of rounds don't mean
+    // hundreds or thousands of full-page re-renders and sound effects.
+
+    canFastForward() {
+        return !this.fastForwarding && this.engine.phase === 'buying' && this.engine.tickets.length === 0;
+    }
+
+    runFastForward(drawings, ticketsPerRound) {
+        if (!this.canFastForward()) {
+            return;
+        }
+        if (!Number.isInteger(drawings) || drawings < 1 || drawings > MAX_FASTFORWARD_DRAWINGS) {
+            setMessage(`Enter a number of drawings from 1 to ${MAX_FASTFORWARD_DRAWINGS.toLocaleString('en-US')}.`);
+            return;
+        }
+        if (!Number.isInteger(ticketsPerRound) || ticketsPerRound < 1) {
+            setMessage('Enter a whole number of tickets per drawing, at least 1.');
+            return;
+        }
+
+        this.fastForwarding = true;
+        this.ff = {
+            target: drawings,
+            ticketsPerRound,
+            drawingsRun: 0,
+            spent: 0,
+            won: 0,
+            biggestWin: 0,
+            jackpotsWon: 0,
+            stoppedEarly: false,
+            outOfMoney: false
+        };
+        document.getElementById('game-container').dataset.fastforward = 'true';
+        document.getElementById('fastforward-summary').hidden = true;
+        this.updateFastForwardProgress();
+        this.updateButtons(); // reflect the locked-out controls immediately, not just once a chunk runs
+        setTimeout(() => this.fastForwardChunk(), 0);
+    }
+
+    stopFastForward() {
+        if (!this.fastForwarding || !this.ff) {
+            return;
+        }
+        this.ff.stoppedEarly = true;
+    }
+
+    // Runs simulated rounds for up to FASTFORWARD_CHUNK_BUDGET_MS of real time, then
+    // yields back to the browser (another chunk is scheduled if there is more to do) -
+    // so a long run never blocks the page, and Stop always takes effect promptly.
+    fastForwardChunk() {
+        const ff = this.ff;
+        const engine = this.engine;
+        const chunkStart = Date.now();
+
+        while (ff.drawingsRun < ff.target && !ff.stoppedEarly) {
+            const quantity = Math.min(ff.ticketsPerRound, engine.maxAffordable());
+            if (quantity < 1) {
+                ff.outOfMoney = true;
+                break;
+            }
+            engine.buyTickets(quantity);
+            const result = engine.draw();
+            ff.drawingsRun += 1;
+            ff.spent += quantity * engine.ticketPrice;
+            ff.won += result.draw.totalWon;
+            if (result.draw.totalWon > ff.biggestWin) {
+                ff.biggestWin = result.draw.totalWon;
+            }
+            if (result.draw.jackpotWon) {
+                ff.jackpotsWon += 1;
+            }
+            engine.nextRound();
+
+            if (Date.now() - chunkStart > FASTFORWARD_CHUNK_BUDGET_MS) {
+                break;
+            }
+        }
+
+        this.updateFastForwardProgress();
+
+        if (ff.drawingsRun >= ff.target || ff.stoppedEarly || ff.outOfMoney) {
+            this.finishFastForward();
+        } else {
+            setTimeout(() => this.fastForwardChunk(), 0);
+        }
+    }
+
+    updateFastForwardProgress() {
+        const ff = this.ff;
+        const pct = ff.target > 0 ? Math.round((ff.drawingsRun / ff.target) * 100) : 0;
+        document.getElementById('ff-progress').setAttribute('aria-valuenow', String(pct));
+        document.getElementById('ff-progress-fill').style.width = `${pct}%`;
+        setText(document.getElementById('ff-progress-label'),
+            `Simulating... ${ff.drawingsRun.toLocaleString('en-US')} / ${ff.target.toLocaleString('en-US')} drawings`);
+    }
+
+    finishFastForward() {
+        const ff = this.ff;
+        this.fastForwarding = false;
+        document.getElementById('game-container').dataset.fastforward = 'false';
+
+        recordStats({ drawsPlayed: ff.drawingsRun, ticketsBought: ff.drawingsRun * ff.ticketsPerRound, spent: ff.spent, won: ff.won });
+
+        const net = ff.won - ff.spent;
+        const summary = document.getElementById('fastforward-summary');
+        summary.hidden = false;
+        clearChildren(summary);
+        const heading = document.createElement('h3');
+        heading.textContent = ff.stoppedEarly ? 'Stopped early' : (ff.outOfMoney ? 'Ran out of money' : 'Simulation complete');
+        const lines = document.createElement('div');
+        lines.innerHTML =
+            `Drawings run: ${ff.drawingsRun.toLocaleString('en-US')}<br>` +
+            `Tickets bought: ${(ff.drawingsRun * ff.ticketsPerRound).toLocaleString('en-US')}<br>` +
+            `Spent: ${formatMoney(ff.spent)}<br>` +
+            `Won: ${formatMoney(ff.won)}<br>` +
+            `Net: ${formatMoney(net)}<br>` +
+            `Biggest single win: ${formatMoney(ff.biggestWin)}<br>` +
+            `Jackpots hit: ${ff.jackpotsWon}`;
+        summary.appendChild(heading);
+        summary.appendChild(lines);
+
+        setMessage(`Simulated ${ff.drawingsRun.toLocaleString('en-US')} drawings. Net ${formatMoney(net)}.`);
+        this.updateUI();
     }
 
     // ---- Rendering ----
@@ -546,14 +715,21 @@ class Kiosk {
 
     updateButtons() {
         const engine = this.engine;
-        document.getElementById('clear-tickets').disabled = !(engine.phase === 'buying' && engine.tickets.length > 0);
-        document.getElementById('quantity-amount').disabled = engine.phase !== 'buying';
-        document.getElementById('buy-custom').disabled = engine.phase !== 'buying';
-        document.getElementById('draw-button').disabled = !engine.canDraw();
-        document.getElementById('restart').style.display = engine.isBroke() ? 'inline-block' : 'none';
-        document.getElementById('bankroll-amount').disabled = !engine.canSetBalance();
-        document.getElementById('set-bankroll').disabled = !engine.canSetBalance();
-        document.getElementById('check-tickets-button').disabled = !engine.canCheck();
+        // While fast-forwarding, every normal per-round control is locked out - the CSS
+        // already hides their whole dock, but the controls are also genuinely disabled
+        // underneath it, not just visually hidden.
+        const ff = this.fastForwarding;
+        document.getElementById('clear-tickets').disabled = ff || !(engine.phase === 'buying' && engine.tickets.length > 0);
+        document.getElementById('quantity-amount').disabled = ff || engine.phase !== 'buying';
+        document.getElementById('buy-custom').disabled = ff || engine.phase !== 'buying';
+        document.getElementById('draw-button').disabled = ff || !engine.canDraw();
+        document.getElementById('restart').style.display = !ff && engine.isBroke() ? 'inline-block' : 'none';
+        document.getElementById('bankroll-amount').disabled = ff || !engine.canSetBalance();
+        document.getElementById('set-bankroll').disabled = ff || !engine.canSetBalance();
+        document.getElementById('check-tickets-button').disabled = ff || !engine.canCheck();
+        document.getElementById('ff-drawings').disabled = !this.canFastForward();
+        document.getElementById('ff-tickets').disabled = !this.canFastForward();
+        document.getElementById('fast-forward-button').disabled = !this.canFastForward();
     }
 
     buildPaytable() {
@@ -603,6 +779,10 @@ document.getElementById('toggle-paytable').addEventListener('click', () => kiosk
 document.getElementById('clear-tickets').addEventListener('click', () => kiosk.clearTickets());
 document.getElementById('draw-button').addEventListener('click', () => kiosk.draw());
 document.getElementById('check-tickets-button').addEventListener('click', () => kiosk.checkTickets());
+document.getElementById('fast-forward-button').addEventListener('click', () => {
+    kiosk.runFastForward(Number(document.getElementById('ff-drawings').value), Number(document.getElementById('ff-tickets').value));
+});
+document.getElementById('ff-stop-button').addEventListener('click', () => kiosk.stopFastForward());
 document.getElementById('next-round').addEventListener('click', () => kiosk.nextRound());
 document.getElementById('restart').addEventListener('click', () => kiosk.restart());
 

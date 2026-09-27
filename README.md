@@ -125,6 +125,12 @@ bar, so it's easy to switch between them.
   number stays exact, only the detailed per-ticket list is capped for display
 - A hard cap of 1,000,000 tickets per drawing (still $2,000,000 to reach) keeps ticket
   generation itself fast and the tab from running out of memory on an unreasonable request
+- **Simulate many drawings at once**: run up to 100,000 real, independent drawings in a
+  row automatically (same odds every time, just automated), buying a chosen number of
+  tickets each round. The jackpot rolls over naturally across the whole run &mdash; a
+  useful way to actually see it grow to something dramatic, and to see just how rarely
+  even a huge number of real chances turns into a real win. Stoppable at any time; ends
+  with a summary (drawings run, spent, won, biggest win, jackpots hit)
 
 ### Rules
 
