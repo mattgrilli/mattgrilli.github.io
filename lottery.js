@@ -146,6 +146,16 @@ function setMessage(msg) {
 
 const QUANTITIES = [1, 5, 10, 25, 50];
 
+// Buying (or winning with) a huge number of tickets is exactly the kind of thing this
+// game is for - seeing just how rarely any of them hit. But building a DOM row per
+// ticket (each with 6 more elements for its numbers) stops being reasonable long before
+// "huge": tens of thousands of rows can make the whole page freeze while the browser
+// lays them out. The underlying numbers (balance, statistics, total winnings) are always
+// exact regardless; only the detailed, per-ticket list is capped, with a note showing how
+// many aren't shown.
+const MAX_TICKET_ROWS = 300;
+const MAX_WINNER_ROWS = 200;
+
 class Kiosk {
     constructor(engine) {
         this.engine = engine;
@@ -348,10 +358,15 @@ class Kiosk {
             : `${engine.tickets.length} ${noun} played.`);
 
         const draw = engine.phase === 'results' ? engine.lastDraw : null;
-        syncChildren(list, engine.tickets,
+        const shown = engine.tickets.slice(0, MAX_TICKET_ROWS);
+        syncChildren(list, shown,
             (ticket, index) => `${index}:${ticket.whites.join(',')}:${ticket.red}`,
             () => this.buildTicketRow(),
             (row, ticket, index) => this.updateTicketRow(row, ticket, index, draw));
+
+        const hiddenCount = engine.tickets.length - shown.length;
+        setText(document.getElementById('ticket-list-note'),
+            hiddenCount > 0 ? `+ ${hiddenCount.toLocaleString('en-US')} more not shown (still fully counted above).` : '');
     }
 
     buildTicketRow() {
@@ -403,9 +418,10 @@ class Kiosk {
             container.appendChild(p);
             return;
         }
+        const shownWinners = winners.slice(0, MAX_WINNER_ROWS);
         const list = document.createElement('div');
         list.className = 'winner-rows';
-        winners.forEach(({ result, index }) => {
+        shownWinners.forEach(({ result, index }) => {
             const row = document.createElement('div');
             row.className = 'winner-row';
             const ticket = document.createElement('span');
@@ -423,10 +439,17 @@ class Kiosk {
             list.appendChild(row);
         });
         container.appendChild(list);
+        const hiddenWinners = winners.length - shownWinners.length;
+        if (hiddenWinners > 0) {
+            const p = document.createElement('p');
+            p.className = 'no-winners';
+            p.textContent = `+ ${hiddenWinners.toLocaleString('en-US')} more winning tickets not shown (still fully counted above).`;
+            container.appendChild(p);
+        }
         if (loserCount > 0) {
             const p = document.createElement('p');
             p.className = 'no-winners';
-            p.textContent = `${loserCount} other ticket${loserCount === 1 ? '' : 's'} did not win.`;
+            p.textContent = `${loserCount.toLocaleString('en-US')} other ticket${loserCount === 1 ? '' : 's'} did not win.`;
             container.appendChild(p);
         }
     }

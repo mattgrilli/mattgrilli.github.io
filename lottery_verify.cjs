@@ -506,6 +506,39 @@ test('Page: a chosen starting balance is what New Game restores after going brok
   assert.match(env.node('message').textContent, /start again with \$6/);
 });
 
+test('Page: buying far more tickets than can be usefully listed still shows every one in the DOM count cap', () => {
+  const env = makeEnvironment();
+  env.engine.balance = 100000;
+  assert.equal(env.kiosk.buy(500), true);
+  assert.equal(env.engine.tickets.length, 500);
+  assert.equal(env.node('ticket-list').children.length, 300); // capped, not 500
+  assert.match(env.node('ticket-list-note').textContent, /\+ 200 more not shown/);
+  assert.match(env.node('tickets-summary').textContent, /500 tickets/); // the real count is still shown
+});
+
+test('Page: the ticket-list cap does not affect balance, statistics or per-ticket accuracy', () => {
+  const env = makeEnvironment();
+  env.engine.balance = 100000;
+  env.kiosk.buy(500);
+  // every ticket matches only the red ball ($4 each): 500 winners, well past the 200-row cap
+  env.engine.tickets.forEach(t => { t.whites = [60, 61, 62, 63, 64]; t.red = 9; });
+  forcedDraw(env, [1, 2, 3, 4, 5], 9);
+  assert.equal(env.engine.lastDraw.totalWon, 500 * 4);
+  assert.equal(env.getSession().ticketsBought, 500);
+  assert.equal(env.getSession().totalSpent, 1000);
+  assert.equal(env.engine.balance, 100000 - 1000 + 2000);
+  const rows = env.node('winners-list').children[0].children;
+  assert.equal(rows.length, 200); // capped display, not all 500
+  assert.match(env.node('winners-list').children[1].textContent, /\+ 300 more winning tickets not shown/);
+});
+
+test('Page: the caps do not trigger for an ordinary number of tickets', () => {
+  const env = makeEnvironment();
+  env.kiosk.buy(50);
+  assert.equal(env.node('ticket-list').children.length, 50);
+  assert.equal(env.node('ticket-list-note').textContent, '');
+});
+
 test('Page: quantity chips buy tickets, and chips you cannot afford are locked', () => {
   const env = makeEnvironment();
   const chips = env.node('quantity-container').children;

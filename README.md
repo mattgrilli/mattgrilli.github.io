@@ -118,6 +118,8 @@ bar, so it's easy to switch between them.
 - A built-in paytable showing every prize and its real odds
 - Session and lifetime statistics; going broke offers a fresh $100 to start over
 - Sound effects with a mute button, and a Paytable toggle
+- Buy (or win with) thousands of tickets at once without the page freezing &mdash; every
+  number stays exact, only the detailed per-ticket list is capped for display
 
 ### Rules
 
