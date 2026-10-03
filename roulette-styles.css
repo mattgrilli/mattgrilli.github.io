@@ -1,21 +1,22 @@
-/* Matt's Lucky Draw
-   Layout: a ticket kiosk on a night sky. Top bar, a paytable panel, the drawn-numbers
-   area, the player's tickets, and one control dock whose contents follow the game phase
-   ([data-phase] on #game-container, set by lottery.js). */
+/* Matt's Roulette
+   Layout: a betting table on dark red felt in a black-and-gold rail. Top bar, the result
+   ball, the table (numbers grid + outside bets), and one control dock whose contents
+   follow the game phase ([data-phase] / [data-fastforward] on #game-container, set by
+   roulette.js). */
 
 :root {
-    --sky-top: #1c1440;
-    --sky-bottom: #0a0620;
-    --panel: rgba(255, 255, 255, 0.06);
-    --booth: #241a52;
-    --booth-edge: #ffd54a;
-    --ink: #ffffff;
+    --felt: #3a0a12;
+    --felt-edge: #22050a;
+    --rail: #1a1010;
+    --rail-light: #3a2420;
+    --trim: #d4af37;
     --accent: #ffd54a;
+    --panel: rgba(255, 255, 255, 0.06);
     --win: #46e08c;
     --loss: #ff6b6b;
-    --white-ball: #f4f6fb;
-    --white-ball-ink: #1b1b2c;
-    --red-ball: #e0392f;
+    --red-pocket: #c01f2e;
+    --black-pocket: #15171c;
+    --green-pocket: #0f7a3d;
     --serif: 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, 'Times New Roman', serif;
 }
 
@@ -32,48 +33,32 @@ body {
     justify-content: center;
     align-items: center;
     font-family: 'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
-    color: var(--ink);
-    background: radial-gradient(ellipse at 50% -10%, #3a2a7a 0%, var(--sky-top) 45%, var(--sky-bottom) 100%);
+    color: #ffffff;
+    background: radial-gradient(ellipse at 50% -10%, #5a1420 0%, #2a0810 45%, #140508 100%);
     background-attachment: fixed;
-}
-
-/* A few static stars behind the kiosk */
-body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    z-index: -1;
-    background-image:
-        radial-gradient(1.5px 1.5px at 10% 20%, #fff, transparent),
-        radial-gradient(1.5px 1.5px at 80% 15%, #fff, transparent),
-        radial-gradient(1px 1px at 60% 70%, #fff, transparent),
-        radial-gradient(1px 1px at 30% 85%, #fff, transparent),
-        radial-gradient(1.5px 1.5px at 90% 60%, #fff, transparent),
-        radial-gradient(1px 1px at 20% 55%, #fff, transparent);
-    opacity: 0.55;
 }
 
 #game-container {
     position: relative;
     box-sizing: border-box;
     width: 100%;
-    max-width: 720px;
+    max-width: 760px;
     padding: 12px 18px 10px;
     text-align: center;
-    border: 8px solid var(--booth);
+    border: 8px solid var(--rail);
     border-radius: 20px;
-    background: linear-gradient(180deg, #1a1240 0%, #120c30 100%);
+    background: radial-gradient(ellipse at 50% 20%, var(--felt) 0%, var(--felt-edge) 85%);
     box-shadow:
         0 22px 55px rgba(0, 0, 0, 0.6),
         0 0 0 1px rgba(0, 0, 0, 0.5),
-        inset 0 0 0 2px var(--booth-edge),
-        inset 0 0 70px rgba(0, 0, 0, 0.4);
+        inset 0 0 0 2px var(--trim),
+        inset 0 0 70px rgba(0, 0, 0, 0.45);
 }
 
 h1 {
     margin: 0;
     font-family: var(--serif);
-    font-size: 23px;
+    font-size: 22px;
     font-weight: 700;
     font-style: italic;
     letter-spacing: 0.02em;
@@ -83,14 +68,23 @@ h1 {
 
 /* ---------- Top bar ---------- */
 
+#top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    margin-bottom: 4px;
+}
+
 #other-games {
     display: flex;
     gap: 6px;
 }
 
 .other-game {
-    padding: 5px 12px;
-    font-size: 13px;
+    padding: 5px 11px;
+    font-size: 12.5px;
     font-weight: 700;
     color: var(--accent);
     text-decoration: none;
@@ -111,15 +105,6 @@ h1 {
     outline-offset: 2px;
 }
 
-#top-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 6px 14px;
-    margin-bottom: 4px;
-}
-
 #game-info {
     display: flex;
     align-items: center;
@@ -132,7 +117,7 @@ h1 {
     gap: 10px;
 }
 
-#balance, #jackpot {
+#balance, #wagered {
     margin: 0;
     padding: 4px 13px;
     font-size: 15px;
@@ -202,11 +187,6 @@ h1 {
     text-align: left;
 }
 
-#paytable tr.overall-row {
-    font-weight: 700;
-    color: var(--accent);
-}
-
 #paytable-note {
     margin: 8px 0 0;
     font-size: 11.5px;
@@ -214,12 +194,12 @@ h1 {
     color: rgba(255, 255, 255, 0.6);
 }
 
-/* ---------- Drawn numbers ---------- */
+/* ---------- Result ---------- */
 
-#draw-area {
+#result-area {
     position: relative;
-    margin-bottom: 10px;
-    padding: 10px;
+    margin-bottom: 8px;
+    padding: 8px;
     background: var(--panel);
     border: 1px solid rgba(255, 255, 255, 0.07);
     border-radius: 14px;
@@ -227,191 +207,185 @@ h1 {
 }
 
 .area-title {
-    margin-bottom: 8px;
+    margin-bottom: 6px;
     font-weight: 700;
     color: var(--accent);
+    font-size: 13px;
 }
 
-#drawn-balls {
+#result-pocket {
     display: flex;
-    flex-wrap: wrap;
     justify-content: center;
     align-items: center;
-    gap: 10px;
-    min-height: 64px;
+    min-height: 54px;
 }
 
-#drawn-balls:empty::after {
-    content: 'Buy tickets, then hit Draw to reveal the winning numbers.';
-    max-width: 90%;
+#result-pocket:empty::after {
+    content: 'Place your bets, then hit Spin.';
     font-size: 13px;
     color: rgba(255, 255, 255, 0.5);
 }
 
-.ball {
+.pocket-ball {
     display: flex;
     align-items: center;
     justify-content: center;
+    width: 54px;
+    height: 54px;
     box-sizing: border-box;
-    width: 52px;
-    height: 52px;
-    flex: 0 0 auto;
     font-weight: 800;
     font-size: 18px;
+    color: #ffffff;
     border-radius: 50%;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.45), inset 0 -4px 6px rgba(0, 0, 0, 0.18), inset 0 3px 4px rgba(255, 255, 255, 0.6);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.45), inset 0 -4px 6px rgba(0, 0, 0, 0.25), inset 0 3px 4px rgba(255, 255, 255, 0.3);
     animation: ballPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 
-.ball.white {
-    color: var(--white-ball-ink);
-    background: radial-gradient(circle at 35% 30%, #ffffff, var(--white-ball) 70%);
-}
-
-.ball.red {
-    color: #ffffff;
-    background: radial-gradient(circle at 35% 30%, #ff6a5a, var(--red-ball) 70%);
-}
+.pocket-ball.red { background: radial-gradient(circle at 35% 30%, #e85a5a, var(--red-pocket) 75%); }
+.pocket-ball.black { background: radial-gradient(circle at 35% 30%, #3a3d45, var(--black-pocket) 75%); }
+.pocket-ball.green { background: radial-gradient(circle at 35% 30%, #2bb96a, var(--green-pocket) 75%); }
 
 @keyframes ballPop {
     0% { opacity: 0; transform: scale(0.3) translateY(-14px); }
     100% { opacity: 1; transform: none; }
 }
 
-/* ---------- Tickets ---------- */
+/* ---------- The table ---------- */
 
-#tickets-area {
-    margin-bottom: 10px;
-    padding: 8px 10px;
+#table-area {
+    margin-bottom: 8px;
+    padding: 10px;
     background: var(--panel);
     border: 1px solid rgba(255, 255, 255, 0.07);
     border-radius: 14px;
 }
 
-#tickets-summary {
-    min-height: 20px;
-    font-weight: 600;
+#zero-row {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 4px;
+    margin-bottom: 4px;
 }
 
-#ticket-details {
-    margin-top: 6px;
-    text-align: left;
+#numbers-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    margin-bottom: 8px;
 }
 
-#ticket-details summary {
-    cursor: pointer;
-    font-size: 13px;
-    color: rgba(255, 255, 255, 0.75);
-    outline: none;
-}
-
-#ticket-list {
-    max-height: 220px;
-    margin-top: 6px;
-    overflow-y: auto;
-    border-radius: 8px;
-}
-
-#ticket-list-note {
-    margin-top: 6px;
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.5);
-}
-
-.ticket-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 6px;
-    font-size: 12px;
-}
-
-.ticket-row:nth-child(odd) {
-    background: rgba(255, 255, 255, 0.04);
-}
-
-.ticket-label {
-    flex: 0 0 32px;
-    color: rgba(255, 255, 255, 0.6);
-}
-
-.ticket-balls {
-    display: flex;
-    flex-wrap: wrap;
+#outside-bets {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
     gap: 4px;
 }
 
-.mini-ball {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    font-size: 10px;
-    font-weight: 700;
-    border-radius: 50%;
-    color: var(--white-ball-ink);
-    background: var(--white-ball);
-}
-
-.mini-ball.red {
-    color: #fff;
-    background: var(--red-ball);
-}
-
-.mini-ball.hit {
-    box-shadow: 0 0 0 2px var(--accent);
-}
-
-#winners-list {
-    margin-top: 8px;
-    text-align: left;
-}
-
-.winner-rows {
+.bet-spot {
+    position: relative;
     display: flex;
     flex-direction: column;
-    gap: 4px;
-}
-
-.winner-row {
-    display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 6px 10px;
+    justify-content: center;
+    gap: 2px;
+    box-sizing: border-box;
+    min-height: 38px;
+    padding: 4px 2px;
+    font: inherit;
     font-size: 13px;
-    background: rgba(70, 224, 140, 0.12);
-    border: 1px solid rgba(70, 224, 140, 0.4);
-    border-radius: 8px;
+    font-weight: 700;
+    color: #ffffff;
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 6px;
+    box-shadow: none;
+    transition: transform 0.08s ease, box-shadow 0.15s ease, background-color 0.15s ease;
 }
 
-.winner-tier {
-    flex: 1;
-    text-align: center;
+.bet-spot:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.16);
+    transform: translateY(-1px);
+}
+
+.bet-spot:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.bet-spot:disabled {
+    cursor: not-allowed;
+}
+
+.bet-spot.red { background: linear-gradient(160deg, #d8394a, var(--red-pocket)); border-color: rgba(0, 0, 0, 0.3); }
+.bet-spot.black { background: linear-gradient(160deg, #2a2d35, var(--black-pocket)); border-color: rgba(255, 255, 255, 0.15); }
+.bet-spot.green { background: linear-gradient(160deg, #1e9c57, var(--green-pocket)); border-color: rgba(0, 0, 0, 0.3); }
+
+.bet-spot.has-bet {
+    box-shadow: 0 0 0 2px var(--accent), 0 0 10px rgba(255, 213, 74, 0.5);
+}
+
+.bet-spot.bet-won {
+    box-shadow: 0 0 0 2px var(--win), 0 0 14px rgba(70, 224, 140, 0.7);
+}
+
+.bet-spot.bet-lost {
+    opacity: 0.55;
+}
+
+.bet-spot-label {
+    line-height: 1.1;
+}
+
+.bet-spot-badge {
+    min-height: 13px;
+    font-size: 11px;
+    font-weight: 800;
+    color: #1d1a10;
+    background: var(--accent);
+    border-radius: 999px;
+    padding: 0 6px;
+}
+
+.bet-spot-badge:empty {
+    background: none;
+    padding: 0;
+}
+
+/* ---------- Bet summary / fast-forward summary ---------- */
+
+#bets-summary {
+    min-height: 18px;
+    margin-bottom: 4px;
+    font-size: 13px;
+    font-weight: 600;
     color: rgba(255, 255, 255, 0.85);
 }
 
-.winner-prize {
-    font-weight: 800;
-    color: var(--win);
-}
-
-.no-winners {
-    margin: 6px 0 0;
+#fastforward-summary {
+    margin: 0 0 8px;
+    padding: 10px 12px;
+    text-align: left;
     font-size: 13px;
-    color: rgba(255, 255, 255, 0.55);
+    line-height: 1.6;
+    background: rgba(255, 213, 74, 0.08);
+    border: 1px solid rgba(255, 213, 74, 0.4);
+    border-radius: 10px;
 }
 
-/* ---------- Chips (ticket quantities) ---------- */
+#fastforward-summary h3 {
+    margin: 0 0 6px;
+    font-size: 14px;
+    color: var(--accent);
+}
+
+/* ---------- Chips (bet amounts) ---------- */
 
 .chip {
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 54px;
-    height: 54px;
+    width: 52px;
+    height: 52px;
     border-radius: 50%;
     cursor: pointer;
     user-select: none;
@@ -427,20 +401,15 @@ h1 {
 .chip::before {
     content: '';
     position: absolute;
-    inset: 8px;
+    inset: 7px;
     border-radius: 50%;
     border: 2px dashed rgba(255, 255, 255, 0.6);
-}
-
-.chip.qty-max {
-    background: radial-gradient(circle at 35% 30%, #ffe57a, #d8a10f 75%);
-    color: #3a2a00;
 }
 
 .chip-value {
     position: relative;
     z-index: 1;
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 800;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
@@ -449,15 +418,15 @@ h1 {
     transform: translateY(-4px);
 }
 
-.chip:active {
-    transform: translateY(0);
+.chip.selected {
+    box-shadow: 0 0 0 3px var(--accent), 0 6px 10px rgba(0, 0, 0, 0.4);
 }
 
-.chip.locked {
-    pointer-events: none;
-    opacity: 0.4;
-    filter: grayscale(0.5);
-}
+.chip-1 { background: radial-gradient(circle at 35% 30%, #e8ecf1, #a9b5c4 75%); color: #2a2f36; }
+.chip-5 { background: radial-gradient(circle at 35% 30%, #ff6a5a, #c01f2e 75%); }
+.chip-10 { background: radial-gradient(circle at 35% 30%, #4fc46a, #1e7a38 75%); }
+.chip-25 { background: radial-gradient(circle at 35% 30%, #6a7aff, #2d3fa8 75%); }
+.chip-100 { background: radial-gradient(circle at 35% 30%, #ffe57a, #c89a10 75%); color: #3a2a00; }
 
 /* ---------- Buttons ---------- */
 
@@ -475,27 +444,27 @@ button {
     transition: transform 0.08s ease, box-shadow 0.08s ease, filter 0.15s ease;
 }
 
-button:hover {
+button:hover:not(:disabled) {
     filter: brightness(1.08);
     transform: translateY(-1px);
 }
 
-button:active {
+button:active:not(:disabled) {
     transform: translateY(2px);
     box-shadow: 0 1px 0 rgba(0, 0, 0, 0.38);
 }
 
-#draw-button, #next-round {
+#spin-button, #next-round {
     color: #ffffff;
     background: linear-gradient(#4fc46a, #2d9448);
 }
 
-#clear-tickets, #restart {
+#clear-bets, #restart, #ff-stop-button {
     color: #ffffff;
     background: linear-gradient(#ff6a4d, #d8391c);
 }
 
-#draw-button {
+#spin-button {
     padding: 10px 30px;
     font-size: 17px;
 }
@@ -509,17 +478,15 @@ button:disabled {
     transform: none;
 }
 
-button:focus-visible, .chip:focus-visible, #quantity-amount:focus-visible {
+button:focus-visible, .chip:focus-visible, input:focus-visible {
     outline: 3px solid #ffffff;
     outline-offset: 2px;
 }
 
-#quantity-amount {
-    width: 90px;
-    padding: 10px;
+input[type="number"] {
     box-sizing: border-box;
     font: inherit;
-    font-size: 15px;
+    font-size: 14px;
     color: #1d1a10;
     background: #ffffff;
     border: none;
@@ -527,9 +494,19 @@ button:focus-visible, .chip:focus-visible, #quantity-amount:focus-visible {
     box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
-#quantity-amount:disabled {
+input[type="number"]:disabled {
     cursor: not-allowed;
     background: #b8c1bd;
+}
+
+#bankroll-amount, #custom-amount, #ff-spins {
+    width: 90px;
+    padding: 8px 10px;
+}
+
+#set-bankroll, #set-custom-amount {
+    padding: 8px 16px;
+    font-size: 14px;
 }
 
 /* ---------- Control dock ---------- */
@@ -552,7 +529,7 @@ button:focus-visible, .chip:focus-visible, #quantity-amount:focus-visible {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 12px;
+    gap: 10px;
     width: 100%;
 }
 
@@ -562,16 +539,12 @@ button:focus-visible, .chip:focus-visible, #quantity-amount:focus-visible {
     gap: 10px;
 }
 
-#game-container[data-phase="buying"] #buy-dock,
-#game-container[data-phase="checking"] #checking-dock,
+#game-container[data-phase="betting"] #betting-dock,
 #game-container[data-phase="results"] #results-dock {
     display: flex;
 }
 
-/* While fast-forwarding, only its own dock shows, regardless of the underlying phase -
-   the player isn't meant to interact with individual rounds during a simulated run. */
-#game-container[data-fastforward="true"] #buy-dock,
-#game-container[data-fastforward="true"] #checking-dock,
+#game-container[data-fastforward="true"] #betting-dock,
 #game-container[data-fastforward="true"] #results-dock {
     display: none !important;
 }
@@ -580,30 +553,20 @@ button:focus-visible, .chip:focus-visible, #quantity-amount:focus-visible {
     display: flex;
 }
 
-#fastforward-controls {
+#bankroll-controls, #chip-container, #bet-controls, #fastforward-controls {
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
     align-items: center;
     gap: 8px;
-    padding-top: 10px;
+}
+
+#fastforward-controls {
+    padding-top: 8px;
     margin-top: 2px;
     font-size: 13px;
     color: rgba(255, 255, 255, 0.75);
     border-top: 1px dashed rgba(255, 255, 255, 0.15);
-}
-
-#fastforward-controls input {
-    width: 70px;
-    padding: 6px 8px;
-    box-sizing: border-box;
-    font: inherit;
-    font-size: 14px;
-    color: #1d1a10;
-    background: #ffffff;
-    border: none;
-    border-radius: 8px;
-    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
 #fast-forward-button {
@@ -611,35 +574,7 @@ button:focus-visible, .chip:focus-visible, #quantity-amount:focus-visible {
     font-size: 14px;
 }
 
-#ff-progress-label {
-    font-size: 13px;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.8);
-}
-
-#ff-stop-button {
-    color: #ffffff;
-    background: linear-gradient(#ff6a4d, #d8391c);
-}
-
-#fastforward-summary {
-    margin-top: 8px;
-    padding: 10px 12px;
-    text-align: left;
-    font-size: 13px;
-    line-height: 1.6;
-    background: rgba(255, 213, 74, 0.08);
-    border: 1px solid rgba(255, 213, 74, 0.4);
-    border-radius: 10px;
-}
-
-#fastforward-summary h3 {
-    margin: 0 0 6px;
-    font-size: 14px;
-    color: var(--accent);
-}
-
-.progress-bar, #check-progress, #ff-progress {
+.progress-bar, #ff-progress {
     width: 100%;
     max-width: 420px;
     height: 18px;
@@ -651,7 +586,7 @@ button:focus-visible, .chip:focus-visible, #quantity-amount:focus-visible {
     box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35);
 }
 
-.progress-fill, #check-progress-fill, #ff-progress-fill {
+.progress-fill, #ff-progress-fill {
     height: 100%;
     width: 0%;
     background: linear-gradient(90deg, #ffe57a, #f2bf10);
@@ -659,96 +594,16 @@ button:focus-visible, .chip:focus-visible, #quantity-amount:focus-visible {
     transition: width 0.15s ease-out;
 }
 
-#check-progress-label {
+#ff-progress-label {
     font-size: 13px;
     font-weight: 600;
     color: rgba(255, 255, 255, 0.8);
-}
-
-#check-tickets-button:disabled {
-    color: rgba(255, 255, 255, 0.6);
-    background: linear-gradient(#8b9892, #6f7c76);
-    box-shadow: none;
-}
-
-#bankroll-controls, #quantity-container, #buy-controls {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    align-items: center;
-    gap: 10px;
-}
-
-#bankroll-controls {
-    padding-bottom: 10px;
-    margin-bottom: 2px;
-    border-bottom: 1px dashed rgba(255, 255, 255, 0.15);
-}
-
-#bankroll-controls label {
-    font-size: 13px;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.75);
-}
-
-#bankroll-amount {
-    width: 90px;
-    padding: 8px 10px;
-    box-sizing: border-box;
-    font: inherit;
-    font-size: 14px;
-    color: #1d1a10;
-    background: #ffffff;
-    border: none;
-    border-radius: 9px;
-    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
-}
-
-#bankroll-amount:disabled {
-    cursor: not-allowed;
-    background: #b8c1bd;
-}
-
-#set-bankroll {
-    padding: 8px 16px;
-    font-size: 14px;
 }
 
 #stats {
     margin-top: 8px;
     font-size: 11.5px;
     color: rgba(255, 255, 255, 0.65);
-}
-
-/* ---------- Jackpot celebration ---------- */
-
-@keyframes jackpotPop {
-    0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
-    70% { transform: translate(-50%, -50%) scale(1.08); opacity: 1; }
-    100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-}
-
-@keyframes jackpotGlow {
-    0%, 100% { box-shadow: 0 0 20px #ffd700; }
-    50% { box-shadow: 0 0 45px #ffd700, 0 0 70px #ff6347; }
-}
-
-.jackpot-popup {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    z-index: 1000;
-    padding: 26px 44px;
-    font-family: var(--serif);
-    font-size: 40px;
-    font-weight: 800;
-    line-height: 1.3;
-    text-align: center;
-    color: #ffffff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
-    background: linear-gradient(45deg, #b8860b, #daa520);
-    border-radius: 15px;
-    animation: jackpotPop 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275), jackpotGlow 2s infinite;
 }
 
 /* ---------- Phones ---------- */
@@ -765,32 +620,37 @@ button:focus-visible, .chip:focus-visible, #quantity-amount:focus-visible {
     }
 
     h1 {
-        font-size: 19px;
+        font-size: 18px;
     }
 
-    #balance, #jackpot {
+    #balance, #wagered {
         padding: 3px 10px;
         font-size: 13px;
     }
 
-    #mute, #toggle-paytable {
+    #mute, #toggle-paytable, .other-game {
         padding: 5px 8px;
-        font-size: 11.5px;
+        font-size: 11px;
     }
 
-    .ball {
-        width: 42px;
-        height: 42px;
+    .bet-spot {
+        min-height: 32px;
+        font-size: 11px;
+    }
+
+    .pocket-ball {
+        width: 44px;
+        height: 44px;
         font-size: 15px;
     }
 
     .chip {
-        width: 46px;
-        height: 46px;
+        width: 44px;
+        height: 44px;
     }
 
     .chip-value {
-        font-size: 13px;
+        font-size: 12px;
     }
 
     #dock {
@@ -803,20 +663,15 @@ button:focus-visible, .chip:focus-visible, #quantity-amount:focus-visible {
         font-size: 13px;
     }
 
-    #draw-button {
+    #spin-button {
         padding: 8px 22px;
         font-size: 15px;
     }
 
-    #quantity-amount {
+    #bankroll-amount, #custom-amount, #ff-spins {
         width: 76px;
-        padding: 8px;
-        font-size: 14px;
-    }
-
-    .jackpot-popup {
-        padding: 20px 26px;
-        font-size: 26px;
+        padding: 7px 8px;
+        font-size: 13px;
     }
 }
 

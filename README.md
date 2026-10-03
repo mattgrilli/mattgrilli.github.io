@@ -159,6 +159,76 @@ fuzz tests that check no money is ever created or lost:
 node lottery_verify.cjs
 ```
 
+---
+
+## 🎰 Also in This Repo: Matt's Roulette
+
+## ▶️ [Play Roulette](https://mattgrilli.github.io/roulette.html)
+
+An American (double-zero) roulette simulator, play money only. Place straight-up numbers
+or any of the standard outside bets — red/black, odd/even, 1-18/19-36, dozens, columns —
+and spin. This project is not affiliated with or endorsed by any casino — there's no real
+wheel, no real bets, no real payouts.
+
+![Matt's Roulette](roulette-screenshot.png)
+
+### The point of it
+
+Every bet offered here carries exactly the same real house edge — 5.26% — whether it pays
+1:1 (betting red) or 35:1 (betting a single number). That's not a simplification; it falls
+straight out of the math (38 pockets, and every payout here is priced for exactly 2 fewer
+winning pockets than a fair payout would need). The built-in paytable shows the real odds
+and edge for every bet, computed the same way, not hand-typed.
+
+### Features
+
+- A real betting table: 0, 00, and 1-36, correctly colored, plus the outside bets, with a
+  chip you select and then click a spot to bet
+- Place several bets at once per spin, same as a real table
+- **Pick your own starting balance** before betting, which also becomes what a later New
+  Game gives back
+- **Simulate many spins at once**: replay your currently placed bets as a repeating
+  pattern for up to 100,000 real, independent spins in a row — a fast way to watch the
+  5.26% edge grind away at a bankroll over a realistic number of trials, not just one spin
+  at a time. Stoppable at any time; ends with a summary
+- Session and lifetime statistics; sound effects with a mute button; a Paytable toggle
+
+### Rules
+
+- American double-zero wheel: 38 pockets (0, 00, 1-36), 18 red and 18 black, 0 and 00
+  green. 0 and 00 lose every outside bet (no surrender/en-prison rule).
+- Straight up pays 35:1, the six outside even-chance bets (red/black, odd/even, 1-18/
+  19-36) pay 1:1, and dozens/columns pay 2:1. Every one of these has exactly a 5.26% house
+  edge.
+- Not offered: the inside combination bets (split, street, corner, six-line) or the
+  American-only five-number 0/00/1/2/3 "basket" bet, which is the one well-known exception
+  with a worse 7.89% edge. See Future Improvements.
+
+### How It's Built
+
+- `roulette-engine.js` — the wheel, the bet menu and the real odds math. No browser code,
+  so it can be tested in plain Node; it reports what happens through events.
+- `roulette.js` — the page: the betting table, chips, sounds and statistics, all in
+  reaction to the engine's events.
+- `roulette.html` and `roulette-styles.css` — the markup and styling.
+
+### Testing
+
+`roulette_verify.cjs` checks that every bet type's house edge matches the real, published
+5.26% American roulette edge (re-derived independently from the bet menu's own win
+conditions, not just echoed from a table), plus the page wiring in a mocked browser, plus
+random-play fuzz tests that check no money is ever created or lost:
+
+```
+node roulette_verify.cjs
+```
+
+### Future Improvements
+
+- The inside combination bets (split, street, corner, six-line) and the five-number basket
+  bet, which would need precise spatial click-zones on the table
+- A European (single-zero) wheel option, with its better 2.70% house edge
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.

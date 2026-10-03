@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Matt's Roulette</title>
+    <meta name="theme-color" content="#1a0f0f">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231a0f0f'/%3E%3Ccircle cx='32' cy='32' r='22' fill='none' stroke='%23ffd54a' stroke-width='3'/%3E%3Ccircle cx='32' cy='14' r='4' fill='%23d4232d'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="roulette-styles.css">
+</head>
+<body>
+    <div id="game-container" data-phase="betting">
+        <div id="top-bar">
+            <h1>Matt's Roulette</h1>
+            <div id="other-games">
+                <a class="other-game" href="blackjack.html">🃏 Blackjack</a>
+                <a class="other-game" href="lottery.html">🎟️ Lucky Draw</a>
+            </div>
+            <div id="game-info">
+                <div id="stats-bar">
+                    <div id="balance">Balance: $500</div>
+                    <div id="wagered">Wagered: $0</div>
+                </div>
+            </div>
+            <div id="top-buttons">
+                <button id="mute" aria-pressed="true">Sound: On</button>
+                <button id="toggle-paytable" aria-pressed="false" title="See every bet's real odds and house edge">Paytable</button>
+            </div>
+        </div>
+
+        <div id="message" role="status" aria-live="polite"></div>
+
+        <div id="paytable" hidden>
+            <table>
+                <caption>Every bet's real odds &amp; house edge</caption>
+                <thead>
+                    <tr><th scope="col">Bet</th><th scope="col">Pays</th><th scope="col">Odds</th><th scope="col">House edge</th></tr>
+                </thead>
+                <tbody id="paytable-body"></tbody>
+            </table>
+            <p id="paytable-note">
+                American (double-zero) wheel. Every bet offered here carries exactly the same real house
+                edge &mdash; 5.26% &mdash; whether it pays 1:1 or 35:1. (The one well-known exception on an
+                American wheel, the five-number 0/00/1/2/3 "basket" bet at 7.89%, isn't offered here.)
+                Not affiliated with or endorsed by any casino. Play money only &mdash; no real bets, no real
+                wheel, no real payouts.
+            </p>
+        </div>
+
+        <div id="result-area">
+            <div class="area-title">Last Spin</div>
+            <div id="result-pocket"></div>
+        </div>
+
+        <div id="table-area">
+            <div id="zero-row"></div>
+            <div id="numbers-grid"></div>
+            <div id="outside-bets"></div>
+        </div>
+
+        <div id="bets-summary"></div>
+        <div id="fastforward-summary" hidden></div>
+
+        <div id="dock">
+            <div id="betting-dock" class="dock-panel">
+                <div id="bankroll-controls">
+                    <label for="bankroll-amount">Start with $</label>
+                    <input type="number" id="bankroll-amount" min="1" step="1" inputmode="numeric" placeholder="500" aria-label="Starting balance in dollars">
+                    <button id="set-bankroll">Set</button>
+                </div>
+                <div id="chip-container"></div>
+                <div id="bet-controls">
+                    <button id="clear-bets">Clear Bets</button>
+                    <input type="number" id="custom-amount" min="1" step="1" inputmode="numeric" placeholder="Custom $" aria-label="Custom chip amount">
+                    <button id="set-custom-amount">Use</button>
+                    <button id="spin-button">Spin</button>
+                </div>
+                <div id="fastforward-controls">
+                    <label for="ff-spins">Simulate</label>
+                    <input type="number" id="ff-spins" min="1" step="1" value="100" inputmode="numeric" aria-label="Number of spins to simulate">
+                    <label for="ff-spins">spins with these bets</label>
+                    <button id="fast-forward-button">Run</button>
+                </div>
+            </div>
+            <div id="fastforward-dock" class="dock-panel">
+                <div id="ff-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                    <div id="ff-progress-fill"></div>
+                </div>
+                <div id="ff-progress-label"></div>
+                <button id="ff-stop-button">Stop</button>
+            </div>
+            <div id="results-dock" class="dock-panel">
+                <button id="next-round">Play Again</button>
+                <button id="restart">New Game ($500)</button>
+            </div>
+        </div>
+
+        <div id="stats"></div>
+    </div>
+    <script src="roulette-engine.js"></script>
+    <script src="roulette.js"></script>
+</body>
+</html>

@@ -93,7 +93,12 @@ h1 {
 
 /* ---------- Top bar ---------- */
 
-#other-game {
+#other-games {
+    display: flex;
+    gap: 6px;
+}
+
+.other-game {
     padding: 5px 12px;
     font-size: 13px;
     font-weight: 700;
@@ -106,12 +111,12 @@ h1 {
     transition: background-color 0.15s ease, transform 0.08s ease;
 }
 
-#other-game:hover {
+.other-game:hover {
     background: rgba(255, 255, 255, 0.16);
     transform: translateY(-1px);
 }
 
-#other-game:focus-visible {
+.other-game:focus-visible {
     outline: 3px solid #ffffff;
     outline-offset: 2px;
 }
