@@ -74,13 +74,17 @@ function saveStats() {
 let gameStats = loadStats();
 let sessionStats = { drawsPlayed: 0, ticketsBought: 0, totalSpent: 0, totalWon: 0, biggestWin: 0 };
 
-function recordStats({ drawsPlayed = 0, ticketsBought = 0, spent = 0, won = 0 }) {
+// `biggestWin` defaults to `won`, correct for a single settled drawing (its own total is
+// also the biggest single win in it). A fast-forward run spans many drawings, so it passes
+// its own largest single-drawing payout explicitly - not `won`, which is the sum across
+// the whole run and would otherwise inflate this figure.
+function recordStats({ drawsPlayed = 0, ticketsBought = 0, spent = 0, won = 0, biggestWin = won }) {
     for (const stats of [gameStats, sessionStats]) {
         stats.drawsPlayed += drawsPlayed;
         stats.ticketsBought += ticketsBought;
         stats.totalSpent += spent;
         stats.totalWon += won;
-        stats.biggestWin = Math.max(stats.biggestWin, won);
+        stats.biggestWin = Math.max(stats.biggestWin, biggestWin);
     }
     saveStats();
     updateStatsDisplay();
@@ -494,7 +498,7 @@ class Kiosk {
         this.fastForwarding = false;
         document.getElementById('game-container').dataset.fastforward = 'false';
 
-        recordStats({ drawsPlayed: ff.drawingsRun, ticketsBought: ff.drawingsRun * ff.ticketsPerRound, spent: ff.spent, won: ff.won });
+        recordStats({ drawsPlayed: ff.drawingsRun, ticketsBought: ff.drawingsRun * ff.ticketsPerRound, spent: ff.spent, won: ff.won, biggestWin: ff.biggestWin });
 
         const net = ff.won - ff.spent;
         const summary = document.getElementById('fastforward-summary');

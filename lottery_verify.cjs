@@ -723,6 +723,25 @@ test('Page: the Max chip never buys past the cap even with an enormous balance',
   assert.equal(env.engine.balance, 300_000_000 - LotteryEngine.MAX_TICKETS_PER_ROUND * 2);
 });
 
+test('Page: fast-forward records the biggest SINGLE drawing win, not the sum across the run', () => {
+  const env = makeEnvironment();
+  // A constant rng makes every quick-picked ticket an exact, deterministic self-match
+  // against that round's own draw (verified directly: same constant in, same numbers out
+  // for both) - so every one of several rounds hits the jackpot independently, each
+  // paying the same fixed amount. The SUM across rounds is then provably larger than any
+  // one round's own payout, which is exactly what distinguishes the bug (comparing
+  // against the sum) from the fix (comparing against the true single-round max).
+  env.engine.rng = () => 0.37;
+  env.engine.balance = 1000;
+  env.kiosk.runFastForward(3, 1);
+  env.flushTimers();
+  assert.equal(env.engine.phase, 'buying'); // sanity: the run actually finished and returned to buying
+  const perRoundWin = env.engine.jackpot; // the reset base; each of the 3 rounds paid exactly this
+  assert.ok(perRoundWin > 0);
+  assert.equal(env.getSession().totalWon, perRoundWin * 3); // sum across all 3 rounds
+  assert.equal(env.getStats().biggestWin, perRoundWin); // NOT the sum - the true single-round max
+});
+
 test('Page: fast-forward runs N real drawings and produces correct accounting', () => {
   const env = makeEnvironment();
   env.engine.balance = 1_000_000;
