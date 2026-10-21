@@ -54,6 +54,52 @@ function playSound(sound) {
     }
 }
 
+// The drawn balls each get a synthesized "pop", timed to match their staggered pop-in
+// animation (see buildBall), so the reveal sounds like balls coming out of the machine.
+const BALL_STAGGER_MS = 260;
+let audioContext = null;
+
+function getAudioContext() {
+    if (!audioContext) {
+        const Context = typeof AudioContext === 'function' ? AudioContext
+            : (typeof webkitAudioContext === 'function' ? webkitAudioContext : null);
+        if (!Context) {
+            return null;
+        }
+        audioContext = new Context();
+    }
+    if (audioContext.state === 'suspended') {
+        audioContext.resume();
+    }
+    return audioContext;
+}
+
+function playBallPops(count, staggerMs) {
+    if (soundMuted) {
+        return;
+    }
+    const ctx = getAudioContext();
+    if (!ctx) {
+        playSound(clickSound);
+        return;
+    }
+    for (let i = 0; i < count; i++) {
+        const last = i === count - 1; // the red ball: a deeper, longer pop
+        const when = ctx.currentTime + 0.03 + (i * staggerMs) / 1000;
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(last ? 520 : 760 + i * 40, when);
+        osc.frequency.exponentialRampToValueAtTime(last ? 180 : 300, when + (last ? 0.16 : 0.09));
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, when);
+        gain.gain.exponentialRampToValueAtTime(last ? 0.5 : 0.35, when + 0.008);
+        gain.gain.exponentialRampToValueAtTime(0.0001, when + (last ? 0.22 : 0.12));
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(when);
+        osc.stop(when + 0.25);
+    }
+}
+
 // ---- Statistics: lifetime persists; session resets with the bankroll on every load ----
 
 function loadStats() {
@@ -199,7 +245,7 @@ class Kiosk {
                 playSound(buySound);
                 break;
             case 'numbersRevealed':
-                playSound(clickSound);
+                playBallPops(this.engine.winningWhites.length + 1, BALL_STAGGER_MS);
                 break;
             case 'checkProgress':
                 this.updateCheckProgress(event.checked, event.total);
@@ -559,7 +605,7 @@ class Kiosk {
         const el = document.createElement('div');
         el.className = `ball ${ball.red ? 'red' : 'white'}`;
         el.textContent = String(ball.n);
-        el.style.animationDelay = `${index * 120}ms`;
+        el.style.animationDelay = `${index * BALL_STAGGER_MS}ms`;
         return el;
     }
 
