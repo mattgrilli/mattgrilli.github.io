@@ -433,6 +433,7 @@ function makeEnvironment(savedStats = null, { storageThrows = false, presets = {
   let now = 0;
   let timerId = 0;
   const timers = [];
+  const documentListeners = [];
   const context = vm.createContext({
     console,
     Audio: class { constructor(src) { this.src = src; } play() { playLog.push(this.src); return Promise.resolve(); } },
@@ -440,7 +441,7 @@ function makeEnvironment(savedStats = null, { storageThrows = false, presets = {
       body: node('body'),
       getElementById: id => node(id),
       createElement: () => new Element(),
-      addEventListener() {}
+      addEventListener: (type, fn) => documentListeners.push({ type, fn })
     },
     localStorage: {
       getItem: key => { if (storageThrows) throw new Error('storage blocked'); return storage.get(key) ?? null; },
@@ -472,7 +473,13 @@ function makeEnvironment(savedStats = null, { storageThrows = false, presets = {
   }
   const source = fs.readFileSync(enginePath, 'utf8') + '\n' + fs.readFileSync(scriptPath, 'utf8');
   vm.runInContext(source + '\n;globalThis.pageExports = { engine, table, getStats: () => ({...gameStats}), getSession: () => ({...sessionStats}), toggleMute, isMuted: () => soundMuted, formatMoney };', context, { filename: 'baccarat-engine.js+baccarat.js' });
-  return { ...context.pageExports, node, flushTimers, stepTimers, playLog, storage };
+  // Dispatches a key press to the page's document-level handlers, as if pressed while
+  // `target` had focus.
+  function pressKey(key, target = { tagName: 'BODY', getAttribute: () => null }) {
+    const event = { key, target, ctrlKey: false, metaKey: false, preventDefault() {} };
+    documentListeners.filter(l => l.type === 'keydown').forEach(l => l.fn(event));
+  }
+  return { ...context.pageExports, node, flushTimers, stepTimers, playLog, storage, pressKey };
 }
 
 // Deals a hand through the page with stacked cards: the engine call the page makes, but
@@ -510,6 +517,17 @@ test('Page: selecting a chip and clicking a spot bets that many dollars', () => 
   assert.equal(env.table.spots.banker.classList.contains('has-bet'), true);
   assert.equal(env.node('wagered').textContent, 'Wagered: $50');
   assert.equal(env.node('balance').textContent, 'Balance: $950');
+});
+
+test('Page: Enter deals from the page, but not when pressed on a focused button or chip', () => {
+  const env = makeEnvironment();
+  env.table.spots.player.onclick();
+  env.pressKey('Enter', { tagName: 'BUTTON', getAttribute: () => null }); // e.g. a focused bet spot
+  env.pressKey('Enter', { tagName: 'DIV', getAttribute: name => (name === 'role' ? 'button' : null) }); // a chip
+  env.pressKey('Enter', { tagName: 'INPUT', getAttribute: () => null });
+  assert.equal(env.engine.phase, 'betting');
+  env.pressKey('Enter');
+  assert.equal(env.engine.phase, 'results');
 });
 
 test('Page: money shows cents only when there are some', () => {

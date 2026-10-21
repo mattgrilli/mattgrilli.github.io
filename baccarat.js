@@ -702,7 +702,11 @@ document.getElementById('fast-forward-button').addEventListener('click', () => {
 document.getElementById('ff-stop-button').addEventListener('click', () => table.stopFastForward());
 
 document.addEventListener('keydown', event => {
-    if (event.target && event.target.tagName === 'INPUT') {
+    // Keys typed into a field, or pressed on a focused button, spot or chip, belong to that
+    // control: Enter there must not also deal or start a new round.
+    const target = event.target;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'BUTTON' ||
+        (target.getAttribute && target.getAttribute('role') === 'button'))) {
         return;
     }
     if (event.key !== 'Enter') {
