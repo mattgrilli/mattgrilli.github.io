@@ -2,10 +2,11 @@
 
 // Checks for Matt's Roulette. Run with:  node roulette_verify.cjs
 //
-// Part 1 tests the engine (roulette-engine.js) directly in plain Node, with no browser,
-// including that every bet type's house edge matches the real, published 5.26% American
-// roulette edge. Part 2 loads the engine and the page (roulette.js) into a mocked browser
-// to check the page wiring.
+// Part 1 tests the wheel and the bet catalogue: every one of the 158 bets on the table
+// covers the right numbers, and its house edge matches the real American-roulette figure
+// (5.26%, or 7.89% for the basket), computed two independent ways. Part 2 tests the engine
+// (roulette-engine.js) in plain Node. Part 3 loads the engine and the page (roulette.js)
+// into a mocked browser to check the table layout and the page wiring.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -15,7 +16,7 @@ const assert = require('node:assert/strict');
 const dir = process.argv[2] ? path.resolve(process.argv[2]) : __dirname;
 const enginePath = path.join(dir, 'roulette-engine.js');
 const scriptPath = path.join(dir, 'roulette.js');
-const { RouletteEngine, colorOf, computeOddsTable, POCKETS, BET_TYPES } = require(enginePath);
+const { RouletteEngine, colorOf, computeOddsTable, houseEdgePct, POCKETS, WHEEL_ORDER, BETS, BET_LIST } = require(enginePath);
 
 const results = [];
 function test(name, fn) {
@@ -29,292 +30,361 @@ function record(engine) {
   return events;
 }
 
+// A small seeded generator, so the statistical checks give the same answer every run.
+function mulberry32(seed) {
+  return () => {
+    seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Where a number sits on the real table, worked out independently of the engine:
+// column 1-12 along the table, row 0 (1, 4 ... 34) to row 2 (3, 6 ... 36) across it.
+const at = n => ({ col: Math.ceil(n / 3), row: (n - 1) % 3 });
+
 // =====================================================================
-// Part 1: the wheel and the odds
+// Part 1: the wheel and the bets
 // =====================================================================
 
-test('Engine: the wheel has 38 pockets - 0, 00, and 1-36, each exactly once', () => {
+test('Wheel: 38 pockets - 0, 00 and 1-36, each exactly once', () => {
   assert.equal(POCKETS.length, 38);
   assert.equal(new Set(POCKETS).size, 38);
-  assert.ok(POCKETS.includes('0'));
-  assert.ok(POCKETS.includes('00'));
+  assert.ok(POCKETS.includes('0') && POCKETS.includes('00'));
   for (let n = 1; n <= 36; n++) assert.ok(POCKETS.includes(String(n)), `missing ${n}`);
 });
 
-test('Engine: 18 red, 18 black, 2 green (0 and 00)', () => {
-  const colors = POCKETS.map(colorOf);
-  assert.equal(colors.filter(c => c === 'red').length, 18);
-  assert.equal(colors.filter(c => c === 'black').length, 18);
-  assert.equal(colors.filter(c => c === 'green').length, 2);
-  assert.equal(colorOf('0'), 'green');
-  assert.equal(colorOf('00'), 'green');
+test('Wheel: 18 red, 18 black, 2 green, with the real red numbers', () => {
+  const count = c => POCKETS.filter(p => colorOf(p) === c).length;
+  assert.equal(count('red'), 18);
+  assert.equal(count('black'), 18);
+  assert.deepEqual(POCKETS.filter(p => colorOf(p) === 'green'), ['0', '00']);
+  for (const n of [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]) assert.equal(colorOf(String(n)), 'red');
 });
 
-test('Engine: every offered bet type has exactly the real 5.26% American house edge', () => {
-  const table = computeOddsTable();
-  assert.equal(table.length, Object.keys(BET_TYPES).length);
-  for (const tier of table) {
-    assert.ok(Math.abs(tier.houseEdgePct - 5.2631578947) < 1e-9, `${tier.key}: ${tier.houseEdgePct}`);
+test('Wheel: the real American order - every pocket once, colours alternate, 0 opposite 00', () => {
+  assert.equal(WHEEL_ORDER.length, 38);
+  assert.deepEqual([...WHEEL_ORDER].sort(), [...POCKETS].sort());
+  assert.equal(WHEEL_ORDER.indexOf('00') - WHEEL_ORDER.indexOf('0'), 19);
+  for (let i = 0; i < 38; i++) {
+    const a = colorOf(WHEEL_ORDER[i]);
+    const b = colorOf(WHEEL_ORDER[(i + 1) % 38]);
+    if (a !== 'green' && b !== 'green') assert.notEqual(a, b, `${WHEEL_ORDER[i]} next to ${WHEEL_ORDER[(i + 1) % 38]}`);
   }
+  // Spot checks against the real wheel: 0 sits between 2 and 28, 00 between 1 and 27.
+  assert.deepEqual([WHEEL_ORDER[37], WHEEL_ORDER[1]], ['2', '28']);
+  assert.deepEqual([WHEEL_ORDER[18], WHEEL_ORDER[20]], ['1', '27']);
 });
 
-test('Engine: each bet type pays correctly: payout * probability of winning + loss * probability of losing = -5.26%', () => {
-  // Re-derive the house edge independently of computeOddsTable, straight from the bet
-  // menu's own `wins` predicates, as a cross-check that the table isn't just echoing
-  // itself.
-  for (const [key, def] of Object.entries(BET_TYPES)) {
-    const winners = POCKETS.filter(p => def.wins(p, key === 'straight' ? '17' : null));
-    const expectedOutcomes = key === 'straight' ? 1 : def.outcomes;
-    assert.equal(winners.length, expectedOutcomes, `${key}: wrong winner count`);
-    const p = winners.length / POCKETS.length;
-    const ev = p * def.payout - (1 - p);
-    assert.ok(Math.abs(ev + 2 / 38) < 1e-9, `${key}: ev ${ev}`);
-  }
+test('Bets: 158 bets with unique keys - every bet a real table offers', () => {
+  assert.equal(BET_LIST.length, 158);
+  assert.equal(BETS.size, 158);
+  const byKind = {};
+  for (const bet of BET_LIST) byKind[bet.kind] = (byKind[bet.kind] || 0) + 1;
+  assert.deepEqual(byKind, { straight: 38, split: 60, street: 12, trio: 2, corner: 22, sixline: 11, basket: 1, dozen: 3, column: 3, evenmoney: 6 });
 });
 
-test('Engine: red and black partition the non-zero numbers with no overlap', () => {
-  const reds = POCKETS.filter(p => colorOf(p) === 'red');
-  const blacks = POCKETS.filter(p => colorOf(p) === 'black');
-  assert.equal(new Set([...reds, ...blacks]).size, 36);
-  reds.forEach(r => assert.ok(!blacks.includes(r)));
-});
-
-test('Engine: dozens and columns each partition 1-36 into three disjoint sets of 12', () => {
-  const dozens = ['dozen1', 'dozen2', 'dozen3'].map(key => POCKETS.filter(p => BET_TYPES[key].wins(p)));
-  const columns = ['column1', 'column2', 'column3'].map(key => POCKETS.filter(p => BET_TYPES[key].wins(p)));
-  for (const group of [dozens, columns]) {
-    group.forEach(set => assert.equal(set.length, 12));
-    const all = group.flat();
-    assert.equal(new Set(all).size, 36); // no overlaps
-    assert.equal(all.every(n => n !== '0' && n !== '00'), true);
-  }
-});
-
-// =====================================================================
-// Part 2: placing bets and spinning
-// =====================================================================
-
-test('Engine: placing a bet deducts the stake immediately', () => {
-  const e = new RouletteEngine({ startingBalance: 100 });
-  const events = record(e);
-  assert.equal(e.placeBet('red', null, 10).ok, true);
-  assert.equal(e.balance, 90);
-  assert.equal(e.bets.length, 1);
-  assert.equal(events.find(ev => ev.type === 'betPlaced') !== undefined, true);
-});
-
-test('Engine: multiple simultaneous bets in one spin are all tracked', () => {
-  const e = new RouletteEngine({ startingBalance: 100 });
-  e.placeBet('red', null, 10);
-  e.placeBet('straight', '17', 5);
-  e.placeBet('dozen1', null, 8);
-  assert.equal(e.bets.length, 3);
-  assert.equal(e.balance, 100 - 10 - 5 - 8);
-  assert.equal(e.totalWagered(), 23);
-});
-
-test('Engine: straight-up bets require a valid pocket selection', () => {
-  const e = new RouletteEngine({ startingBalance: 100 });
-  assert.equal(e.placeBet('straight', '37', 5).reason, 'invalid');
-  assert.equal(e.placeBet('straight', 'red', 5).reason, 'invalid');
-  assert.equal(e.placeBet('straight', '0', 5).ok, true);
-  assert.equal(e.placeBet('straight', '00', 5).ok, true);
-});
-
-test('Engine: cannot bet an invalid amount, more than you have, or an unknown type', () => {
-  const e = new RouletteEngine({ startingBalance: 10 });
-  assert.equal(e.placeBet('red', null, 0).reason, 'invalid');
-  assert.equal(e.placeBet('red', null, -5).reason, 'invalid');
-  assert.equal(e.placeBet('red', null, 2.5).reason, 'invalid');
-  assert.equal(e.placeBet('red', null, 20).reason, 'insufficient');
-  assert.equal(e.placeBet('nonsense', null, 1).reason, 'invalid');
-  assert.equal(e.placeBet('red', null, 10).ok, true);
-});
-
-test('Engine: betting is capped per spin, and refuses once locked', () => {
-  const e = new RouletteEngine({ startingBalance: RouletteEngine.MAX_BETS_PER_SPIN + 50 });
-  for (let i = 0; i < RouletteEngine.MAX_BETS_PER_SPIN; i++) {
-    assert.equal(e.placeBet('red', null, 1).ok, true);
-  }
-  assert.equal(e.placeBet('red', null, 1).reason, 'toomany');
-  e.spin();
-  assert.equal(e.placeBet('red', null, 1).reason, 'locked');
-});
-
-test('Engine: clearing bets refunds them, but only before the spin', () => {
-  const e = new RouletteEngine({ startingBalance: 100 });
-  e.placeBet('red', null, 10);
-  e.placeBet('straight', '7', 5);
-  assert.equal(e.clearBets().ok, true);
-  assert.equal(e.balance, 100);
-  assert.equal(e.bets.length, 0);
-  assert.equal(e.clearBets().reason, 'nothing');
-  e.placeBet('red', null, 10);
-  e.spin();
-  assert.equal(e.clearBets().reason, 'nothing'); // wrong phase, not just empty
-});
-
-test('Engine: cannot spin with no bets placed, and spinning locks further bets', () => {
-  const e = new RouletteEngine();
-  assert.equal(e.spin().reason, 'nobets');
-  e.placeBet('red', null, 10);
-  e.spin();
-  assert.equal(e.phase, 'results');
-  assert.equal(e.spin().reason, 'locked');
-});
-
-test('Engine: red pays 1:1, and 0 loses every outside bet', () => {
-  const e = new RouletteEngine({ startingBalance: 100 });
-  e.placeBet('red', null, 10);
-  const { spin } = e.spin('1'); // 1 is red
-  assert.equal(spin.pocket, '1');
-  assert.equal(spin.color, 'red');
-  assert.equal(spin.results[0].won, true);
-  assert.equal(spin.results[0].payout, 20); // stake back + 1:1 profit
-  assert.equal(e.balance, 100 - 10 + 20);
-
-  const e2 = new RouletteEngine({ startingBalance: 100 });
-  ['red', 'black', 'odd', 'even', 'low', 'high', 'dozen1', 'column1'].forEach(type => e2.placeBet(type, null, 1));
-  const { spin: spin2 } = e2.spin('0');
-  assert.equal(spin2.totalWon, 0); // 0 loses every outside bet
-  assert.equal(e2.balance, 100 - 8);
-});
-
-test('Engine: straight-up pays 35:1 only on an exact match', () => {
-  const e = new RouletteEngine({ startingBalance: 100 });
-  e.placeBet('straight', '17', 10);
-  const hit = e.spin('17');
-  assert.equal(hit.spin.results[0].payout, 360); // stake back + 35:1 profit
-  assert.equal(e.balance, 100 - 10 + 360);
-
-  const e2 = new RouletteEngine({ startingBalance: 100 });
-  e2.placeBet('straight', '17', 10);
-  const miss = e2.spin('18');
-  assert.equal(miss.spin.results[0].payout, 0);
-  assert.equal(e2.balance, 90);
-});
-
-test('Engine: dozens and columns pay 2:1 on the right third', () => {
-  const e = new RouletteEngine({ startingBalance: 100 });
-  e.placeBet('dozen1', null, 10);
-  e.placeBet('column2', null, 10);
-  const { spin } = e.spin('5'); // in dozen1 (1-12) and column2 (2,5,8,...)
-  assert.equal(spin.results[0].payout, 30); // dozen1: stake back + 2:1
-  assert.equal(spin.results[1].payout, 30); // column2: stake back + 2:1
-  assert.equal(e.balance, 100 - 20 + 60);
-});
-
-test('Engine: a single spin settles every placed bet independently', () => {
-  const e = new RouletteEngine({ startingBalance: 100 });
-  e.placeBet('red', null, 10);   // 17 is black -> loses
-  e.placeBet('odd', null, 10);   // 17 is odd -> wins
-  e.placeBet('straight', '17', 5); // exact match -> wins big
-  const { spin } = e.spin('17');
-  assert.deepEqual(spin.results.map(r => r.won), [false, true, true]);
-  assert.equal(spin.totalWon, 0 + 20 + 180);
-  assert.equal(e.balance, 100 - 25 + 200);
-});
-
-test('Engine: statistics track wagering and winnings across spins', () => {
-  const e = new RouletteEngine({ startingBalance: 1000 });
-  e.placeBet('red', null, 10);
-  e.placeBet('black', null, 5);
-  e.spin('1'); // red wins, black loses
-  assert.equal(e.stats.spinsPlayed, 1);
-  assert.equal(e.stats.betsPlaced, 2);
-  assert.equal(e.stats.totalWagered, 15);
-  assert.equal(e.stats.totalWon, 20);
-  assert.equal(e.stats.biggestWin, 20);
-  e.nextRound();
-  e.placeBet('straight', '1', 2);
-  e.spin('1');
-  assert.equal(e.stats.spinsPlayed, 2);
-  assert.equal(e.stats.biggestWin, 72); // 2 * 36
-});
-
-test('Engine: nextRound clears bets and returns to betting, only after a spin', () => {
-  const e = new RouletteEngine();
-  assert.equal(e.nextRound(), false);
-  e.placeBet('red', null, 10);
-  assert.equal(e.nextRound(), false); // still betting, no spin yet
-  e.spin();
-  assert.equal(e.nextRound(), true);
-  assert.equal(e.phase, 'betting');
-  assert.equal(e.bets.length, 0);
-  assert.equal(e.lastSpin, null);
-});
-
-test('Engine: the player can set their own starting balance before betting', () => {
-  const e = new RouletteEngine({ startingBalance: 100 });
-  assert.equal(e.setBalance(5000).ok, true);
-  assert.equal(e.balance, 5000);
-  assert.equal(e.startingBalance, 5000);
-  assert.equal(e.setBalance(1.5).reason, 'invalid');
-  assert.equal(e.setBalance(-10).reason, 'invalid');
-  e.placeBet('red', null, 1);
-  assert.equal(e.setBalance(999).reason, 'locked');
-});
-
-test('Engine: isBroke stays false mid-spin-placement at $0, true once settled', () => {
-  const e = new RouletteEngine({ startingBalance: 1 });
-  e.placeBet('straight', '1', 1); // guaranteed loser vs the forced pocket below
-  assert.equal(e.balance, 0);
-  assert.equal(e.isBroke(), false); // a bet is placed and can still be spun
-  e.spin('2');
-  assert.equal(e.phase, 'results');
-  assert.equal(e.isBroke(), true);
-});
-
-test('Engine: going broke offers a restart that preserves the chosen bankroll', () => {
-  const e = new RouletteEngine({ startingBalance: 100 });
-  e.setBalance(4);
-  e.placeBet('straight', '1', 4);
-  e.spin('2'); // guaranteed loss
-  e.nextRound();
-  assert.equal(e.balance, 0);
-  assert.equal(e.isBroke(), true);
-  assert.equal(e.restart(), true);
-  assert.equal(e.balance, 4); // the chosen $4, not the original $100
-  assert.equal(e.stats.spinsPlayed, 0);
-});
-
-test('Engine: restart refuses while you still have money', () => {
-  const e = new RouletteEngine({ startingBalance: 100 });
-  assert.equal(e.restart(), false);
-});
-
-test('Engine: a fixed rng makes a spin fully deterministic', () => {
-  const values = [0.5];
-  let i = 0;
-  const rng = () => values[i++ % values.length];
-  const e1 = new RouletteEngine({ rng });
-  e1.placeBet('red', null, 1);
-  const p1 = e1.spin().spin.pocket;
-  const e2 = new RouletteEngine({ rng });
-  e2.placeBet('red', null, 1);
-  const p2 = e2.spin().spin.pocket;
-  assert.equal(p1, p2);
-});
-
-test('Engine: fuzz - 4000 random spins with varied bets never create or lose money', () => {
-  const e = new RouletteEngine({ startingBalance: 1000 });
-  let adjust = 0;
-  const types = Object.keys(BET_TYPES);
-  for (let round = 0; round < 4000; round++) {
-    if (e.balance < 20) { e.balance += 1000; adjust += 1000; }
-    const numBets = 1 + Math.floor(Math.random() * 5);
-    for (let i = 0; i < numBets && e.balance >= 1; i++) {
-      const type = types[Math.floor(Math.random() * types.length)];
-      const selection = type === 'straight' ? POCKETS[Math.floor(Math.random() * POCKETS.length)] : null;
-      const amount = 1 + Math.floor(Math.random() * Math.min(5, e.balance));
-      e.placeBet(type, selection, amount);
+test('Bets: every split, corner, street and six line covers numbers that really touch', () => {
+  for (const bet of BET_LIST) {
+    const nums = bet.numbers.map(Number);
+    if (bet.numbers.some(p => p === '0' || p === '00')) continue;
+    const cells = nums.map(at);
+    const cols = new Set(cells.map(c => c.col));
+    const rows = new Set(cells.map(c => c.row));
+    if (bet.kind === 'split') {
+      const [a, b] = cells;
+      assert.equal(Math.abs(a.col - b.col) + Math.abs(a.row - b.row), 1, bet.key);
+    } else if (bet.kind === 'corner') {
+      assert.equal(cols.size, 2, bet.key); assert.equal(rows.size, 2, bet.key);
+      assert.equal(Math.max(...cols) - Math.min(...cols), 1, bet.key);
+      assert.equal(Math.max(...rows) - Math.min(...rows), 1, bet.key);
+    } else if (bet.kind === 'street') {
+      assert.equal(cols.size, 1, bet.key); assert.equal(rows.size, 3, bet.key);
+    } else if (bet.kind === 'sixline') {
+      assert.equal(cols.size, 2, bet.key); assert.equal(rows.size, 3, bet.key);
+      assert.equal(Math.max(...cols) - Math.min(...cols), 1, bet.key);
     }
-    if (e.bets.length === 0) { e.placeBet('red', null, 1); }
-    const result = e.spin();
-    assert.equal(result.ok, true, `round ${round}`);
-    assert.ok(Number.isInteger(e.balance), `non-integer balance at round ${round}`);
-    assert.equal(e.balance, 1000 + adjust - e.stats.totalWagered + e.stats.totalWon, `round ${round}: money accounting is wrong`);
-    e.nextRound();
+  }
+  // Every adjacent pair on the grid is offered as a split, and every 2x2 block as a corner.
+  const splits = BET_LIST.filter(b => b.kind === 'split' && !b.numbers.includes('0') && !b.numbers.includes('00'));
+  assert.equal(splits.length, 12 * 2 + 11 * 3); // 24 within columns, 33 across
+  assert.equal(BET_LIST.filter(b => b.kind === 'corner').length, 11 * 2);
+});
+
+test('Bets: the zero bets cover the right numbers', () => {
+  const nums = key => BETS.get(key).numbers.join(',');
+  assert.equal(nums('split:0-00'), '0,00');
+  assert.equal(nums('split:0-1'), '0,1');
+  assert.equal(nums('split:00-3'), '00,3');
+  assert.equal(nums('trio:0-1-2'), '0,1,2');
+  assert.equal(nums('trio:00-2-3'), '00,2,3');
+  assert.equal(nums('basket'), '0,00,1,2,3');
+});
+
+test('Bets: outside bets cover the right 12 or 18 numbers, and never 0 or 00', () => {
+  const nums = key => BETS.get(key).numbers.map(Number);
+  assert.deepEqual(nums('dozen2'), Array.from({ length: 12 }, (_, i) => 13 + i));
+  assert.deepEqual(nums('column1'), Array.from({ length: 12 }, (_, i) => 1 + 3 * i));
+  assert.deepEqual(nums('column3'), Array.from({ length: 12 }, (_, i) => 3 + 3 * i));
+  assert.ok(nums('even').every(n => n % 2 === 0) && nums('even').length === 18);
+  assert.ok(nums('high').every(n => n >= 19) && nums('high').length === 18);
+  for (const key of ['dozen1', 'dozen2', 'dozen3', 'column1', 'column2', 'column3', 'red', 'black', 'odd', 'even', 'low', 'high']) {
+    assert.ok(!BETS.get(key).numbers.includes('0') && !BETS.get(key).numbers.includes('00'), key);
+  }
+});
+
+test('Odds: every bet costs exactly 2/38 (5.26%) except the basket at 3/38 (7.89%) - two ways', () => {
+  for (const bet of BET_LIST) {
+    // Way 1: the engine's formula. Way 2: average the actual payback over all 38 pockets.
+    let payback = 0;
+    for (const pocket of POCKETS) payback += bet.numbers.includes(pocket) ? bet.payout + 1 : 0;
+    const enumerated = (1 - payback / 38) * 100;
+    const expected = bet.key === 'basket' ? 300 / 38 : 200 / 38;
+    assert.ok(Math.abs(houseEdgePct(bet) - expected) < 1e-9, `${bet.key}: formula ${houseEdgePct(bet)}`);
+    assert.ok(Math.abs(enumerated - expected) < 1e-9, `${bet.key}: enumerated ${enumerated}`);
+  }
+});
+
+test('Odds: the paytable lists each kind of bet with its real payout, chance and edge', () => {
+  const rows = computeOddsTable();
+  assert.deepEqual(rows.map(r => r.payout), [35, 17, 11, 8, 6, 5, 2, 1]);
+  assert.deepEqual(rows.map(r => Math.round(r.winProbability * 38)), [1, 2, 3, 4, 5, 6, 12, 18]);
+  assert.equal(rows.filter(r => r.houseEdgePct > 6).map(r => r.key).join(), 'basket');
+});
+
+test('Odds: a seeded 380,000-spin run hits every pocket about equally', () => {
+  const engine = new RouletteEngine({ rng: mulberry32(12345) });
+  const counts = new Map(POCKETS.map(p => [p, 0]));
+  for (let i = 0; i < 380_000; i++) {
+    const pocket = engine.drawPocket();
+    counts.set(pocket, counts.get(pocket) + 1);
+  }
+  for (const [pocket, n] of counts) assert.ok(Math.abs(n - 10_000) < 500, `${pocket} drawn ${n} times`);
+});
+
+// =====================================================================
+// Part 2: the engine
+// =====================================================================
+
+test('Engine: placing chips takes them from the balance and stacks them per spot', () => {
+  const engine = new RouletteEngine();
+  const events = record(engine);
+  assert.equal(engine.placeBet('straight:17', 5).ok, true);
+  assert.equal(engine.placeBet('straight:17', 25).ok, true);
+  assert.equal(engine.placeBet('red', 10).ok, true);
+  assert.deepEqual({ ...engine.bets }, { 'straight:17': 30, red: 10 });
+  assert.equal(engine.balance, 460);
+  assert.equal(engine.totalWagered(), 40);
+  assert.equal(events.filter(e => e.type === 'betPlaced').length, 3);
+});
+
+test('Engine: unknown spots, bad amounts and chips you can\'t afford are refused', () => {
+  const engine = new RouletteEngine({ startingBalance: 10 });
+  assert.deepEqual(engine.placeBet('straight:37', 1), { ok: false, reason: 'invalid' });
+  assert.deepEqual(engine.placeBet('split:1-5', 1), { ok: false, reason: 'invalid' });
+  assert.deepEqual(engine.placeBet('red', 0), { ok: false, reason: 'invalid' });
+  assert.deepEqual(engine.placeBet('red', 2.5), { ok: false, reason: 'invalid' });
+  assert.deepEqual(engine.placeBet('red', 11), { ok: false, reason: 'insufficient' });
+  assert.equal(engine.balance, 10);
+  assert.deepEqual({ ...engine.bets }, {});
+});
+
+test('Engine: Undo takes back chips one at a time, most recent first', () => {
+  const engine = new RouletteEngine();
+  engine.placeBet('red', 5);
+  engine.placeBet('straight:7', 1);
+  engine.placeBet('red', 25);
+  engine.undo();
+  assert.deepEqual({ ...engine.bets }, { red: 5, 'straight:7': 1 });
+  engine.undo();
+  assert.deepEqual({ ...engine.bets }, { red: 5 });
+  engine.undo();
+  assert.deepEqual({ ...engine.bets }, {});
+  assert.equal(engine.balance, 500);
+  assert.equal(engine.undo().ok, false);
+});
+
+test('Engine: taking back one spot leaves the others, and Undo skips the removed chips', () => {
+  const engine = new RouletteEngine();
+  engine.placeBet('red', 5);
+  engine.placeBet('black', 1);
+  engine.placeBet('red', 5);
+  assert.equal(engine.removeBet('red').ok, true);
+  assert.deepEqual({ ...engine.bets }, { black: 1 });
+  assert.equal(engine.balance, 499);
+  engine.undo();
+  assert.deepEqual({ ...engine.bets }, {});
+  assert.equal(engine.removeBet('red').ok, false);
+});
+
+test('Engine: Clear refunds the whole table', () => {
+  const engine = new RouletteEngine();
+  engine.placeBet('red', 5);
+  engine.placeBet('corner:1-2-4-5', 20);
+  const events = record(engine);
+  assert.equal(engine.clearBets().ok, true);
+  assert.equal(engine.balance, 500);
+  assert.equal(engine.placements.length, 0);
+  assert.equal(events[0].refund, 25);
+  assert.equal(engine.clearBets().ok, false);
+});
+
+test('Engine: Double adds the same again to every spot, only if affordable', () => {
+  const engine = new RouletteEngine({ startingBalance: 100 });
+  engine.placeBet('red', 10);
+  engine.placeBet('straight:00', 20);
+  assert.equal(engine.doubleBets().ok, true);
+  assert.deepEqual({ ...engine.bets }, { red: 20, 'straight:00': 40 });
+  assert.equal(engine.balance, 40);
+  assert.equal(engine.canDouble(), false); // would need another $60
+  assert.equal(engine.doubleBets().ok, false);
+  assert.equal(engine.balance, 40);
+});
+
+test('Engine: a spin pays each winning bet its odds plus the stake, and keeps losing stakes', () => {
+  const engine = new RouletteEngine();
+  engine.placeBet('straight:17', 10);   // 35:1 -> 360 back
+  engine.placeBet('split:17-20', 10);   // 17:1 -> 180
+  engine.placeBet('corner:13-14-16-17', 10); // 8:1 -> 90
+  engine.placeBet('street:16-17-18', 10); // 11:1 -> 120
+  engine.placeBet('sixline:13-14-15-16-17-18', 10); // 5:1 -> 60
+  engine.placeBet('dozen2', 10);        // 2:1 -> 30
+  engine.placeBet('column2', 10);       // 2:1 -> 30
+  engine.placeBet('black', 10);         // 1:1 -> 20
+  engine.placeBet('odd', 10);           // 1:1 -> 20
+  engine.placeBet('low', 10);           // 1:1 -> 20
+  engine.placeBet('red', 10);           // loses
+  engine.placeBet('straight:0', 10);    // loses
+  const { spin } = engine.spin('17');
+  assert.equal(spin.pocket, '17');
+  assert.equal(spin.color, 'black');
+  assert.equal(spin.wagered, 120);
+  assert.equal(spin.totalWon, 360 + 180 + 90 + 120 + 60 + 30 + 30 + 20 + 20 + 20);
+  assert.equal(engine.balance, 500 - 120 + spin.totalWon);
+  assert.deepEqual(spin.results.filter(r => !r.won).map(r => r.key).sort(), ['red', 'straight:0']);
+});
+
+test('Engine: every bet wins on exactly its own numbers and pays its own odds', () => {
+  for (const bet of BET_LIST) {
+    for (const pocket of POCKETS) {
+      const engine = new RouletteEngine();
+      engine.placeBet(bet.key, 2);
+      const { spin } = engine.spin(pocket);
+      const wins = bet.numbers.includes(pocket);
+      assert.equal(spin.results[0].won, wins, `${bet.key} on ${pocket}`);
+      assert.equal(spin.totalWon, wins ? 2 * (bet.payout + 1) : 0, `${bet.key} on ${pocket}`);
+    }
+  }
+});
+
+test('Engine: 0 and 00 lose every outside bet', () => {
+  for (const pocket of ['0', '00']) {
+    const engine = new RouletteEngine();
+    for (const key of ['red', 'black', 'odd', 'even', 'low', 'high', 'dozen1', 'dozen2', 'dozen3', 'column1', 'column2', 'column3']) engine.placeBet(key, 1);
+    assert.equal(engine.spin(pocket).spin.totalWon, 0);
+  }
+});
+
+test('Engine: no spin without a bet, no betting or second spin once the ball has landed', () => {
+  const engine = new RouletteEngine();
+  assert.deepEqual(engine.spin(), { ok: false, reason: 'nobets' });
+  engine.placeBet('red', 5);
+  engine.spin('1');
+  assert.equal(engine.phase, 'results');
+  assert.deepEqual(engine.spin(), { ok: false, reason: 'locked' });
+  assert.deepEqual(engine.placeBet('red', 5), { ok: false, reason: 'locked' });
+  assert.equal(engine.undo().ok, false);
+  assert.equal(engine.nextRound(), true);
+  assert.equal(engine.phase, 'betting');
+  assert.deepEqual({ ...engine.bets }, {});
+  assert.equal(engine.nextRound(), false);
+});
+
+test('Engine: Rebet puts last spin\'s bets back - only on an empty table you can afford', () => {
+  const engine = new RouletteEngine({ startingBalance: 30 });
+  engine.placeBet('red', 10);
+  engine.placeBet('split:0-00', 5);
+  engine.spin('0'); // red loses, split pays 18 * 5 = 90 -> balance 30 - 15 + 90 = 105
+  engine.nextRound();
+  assert.equal(engine.canRebet(), true);
+  engine.rebet();
+  assert.deepEqual({ ...engine.bets }, { red: 10, 'split:0-00': 5 });
+  assert.equal(engine.canRebet(), false); // table no longer empty
+  engine.clearBets();
+  engine.balance = 14;
+  assert.equal(engine.canRebet(), false);
+  assert.equal(engine.rebet().ok, false);
+});
+
+test('Engine: history keeps the last 20 results, oldest first', () => {
+  const engine = new RouletteEngine({ startingBalance: 1000 });
+  for (let i = 0; i < 25; i++) {
+    engine.placeBet('red', 1);
+    engine.spin(POCKETS[i % 38]);
+    engine.nextRound();
+  }
+  assert.equal(engine.history.length, 20);
+  assert.deepEqual(engine.history, POCKETS.slice(5, 25));
+});
+
+test('Engine: stats count spins, bets, money in and out, and the biggest single win', () => {
+  const engine = new RouletteEngine();
+  engine.placeBet('straight:5', 2);
+  engine.placeBet('red', 3);
+  engine.spin('5'); // 72 + 6
+  engine.nextRound();
+  engine.placeBet('black', 4);
+  engine.spin('1');
+  assert.deepEqual({ ...engine.stats }, { spinsPlayed: 2, betsPlaced: 3, totalWagered: 9, totalWon: 78, biggestWin: 78 });
+});
+
+test('Engine: the starting balance can only be set before any chips are down', () => {
+  const engine = new RouletteEngine();
+  assert.equal(engine.setBalance(2000).ok, true);
+  assert.equal(engine.balance, 2000);
+  assert.equal(engine.setBalance(0).reason, 'invalid');
+  assert.equal(engine.setBalance(12.5).reason, 'invalid');
+  engine.placeBet('red', 1);
+  assert.equal(engine.setBalance(50).reason, 'locked');
+});
+
+test('Engine: broke means a new game at the starting balance', () => {
+  const engine = new RouletteEngine({ startingBalance: 5 });
+  assert.equal(engine.restart(), false);
+  engine.placeBet('red', 5);
+  assert.equal(engine.isBroke(), false); // money still on the table
+  engine.spin('2'); // black
+  assert.equal(engine.isBroke(), true);
+  assert.equal(engine.restart(), true);
+  assert.equal(engine.balance, 5);
+  assert.equal(engine.phase, 'betting');
+  assert.deepEqual(engine.history, []);
+  assert.equal(engine.canRebet(), false);
+});
+
+test('Engine: fuzz - 3,000 random actions never create or lose a dollar', () => {
+  const rng = mulberry32(99);
+  const engine = new RouletteEngine({ startingBalance: 2000, rng });
+  const keys = [...BETS.keys()];
+  // Money is conserved: what's in hand plus what's on the table equals the starting
+  // balance less everything wagered plus everything paid back. A restart (after going
+  // broke) resets the stats, so it resets the baseline too.
+  for (let i = 0; i < 3000; i++) {
+    const r = rng();
+    if (engine.phase === 'results') engine.nextRound();
+    else if (r < 0.5) engine.placeBet(keys[Math.floor(rng() * keys.length)], 1 + Math.floor(rng() * 20));
+    else if (r < 0.6) engine.undo();
+    else if (r < 0.65) engine.removeBet(keys[Math.floor(rng() * keys.length)]);
+    else if (r < 0.7) engine.doubleBets();
+    else if (r < 0.75) engine.rebet();
+    else if (r < 0.78) engine.clearBets();
+    else engine.spin();
+    const onTable = engine.phase === 'betting' ? engine.totalWagered() : 0;
+    assert.equal(engine.balance + onTable, 2000 - engine.stats.totalWagered + engine.stats.totalWon, `step ${i}`);
+    assert.ok(engine.balance >= 0);
+    assert.equal(engine.placements.reduce((s, p) => s + p.amount, 0), engine.totalWagered(), `step ${i}: placements`);
+    if (engine.isBroke()) assert.ok(engine.restart(), 'broke but could not restart');
   }
 });
 
@@ -322,13 +392,13 @@ test('Engine: fuzz - 4000 random spins with varied bets never create or lose mon
 // Part 3: the page (roulette.js) in a mocked browser
 // =====================================================================
 
-function makeEnvironment(savedStats = null, { storageThrows = false, presets = {} } = {}) {
-  // A minimal DOM: enough tree operations for the page's keyed rendering, so tests can
-  // check which elements are kept, replaced or removed. Mirrors the one used for the
-  // blackjack and lottery projects' own page tests.
+function makeEnvironment(savedStats = null, { storageThrows = false, presets = {}, audioContext = null } = {}) {
+  // A minimal DOM: enough tree operations for the page's keyed rendering.
   class Element {
-    constructor() {
-      this.style = {};
+    constructor(tagName = 'DIV') {
+      this.tagName = String(tagName).toUpperCase();
+      const styleProps = {};
+      this.style = { setProperty: (name, value) => { styleProps[name] = String(value); }, getPropertyValue: name => styleProps[name] ?? '' };
       this.dataset = {};
       this.attributes = {};
       this._classes = new Set();
@@ -343,6 +413,7 @@ function makeEnvironment(savedStats = null, { storageThrows = false, presets = {
         contains: name => this._classes.has(name)
       };
       this._text = '';
+      this.innerHTML = '';
       this.children = [];
       this.parentNode = null;
       this.disabled = false;
@@ -376,50 +447,29 @@ function makeEnvironment(savedStats = null, { storageThrows = false, presets = {
     setAttribute(name, value) { this.attributes[name] = String(value); }
     getAttribute(name) { return this.attributes[name] ?? null; }
     addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
-    querySelector() { return new Element(); }
-    querySelectorAll() { return []; }
-    cloneNode() { return new Element(); }
-    getBoundingClientRect() { return { left: 0, top: 0, width: 100, height: 100 }; }
-    animate() { return {}; }
+    click() { (this._listeners.click || []).forEach(fn => fn({ target: this })); }
   }
   const nodes = new Map();
   function node(key) {
     if (!nodes.has(key)) nodes.set(key, new Element());
     return nodes.get(key);
   }
-  // querySelectorAll('.bet-spot') and the type/selection-specific variants used by
-  // spotsFor() need to actually find the spots built onto the real grid containers, so
-  // route those through the three containers that hold them.
-  const betSpotContainers = ['zero-row', 'numbers-grid', 'outside-bets'].map(node);
-  function allBetSpots() {
-    return betSpotContainers.flatMap(c => c.children);
-  }
   const storage = new Map();
   if (savedStats) storage.set('rouletteStats', typeof savedStats === 'string' ? savedStats : JSON.stringify(savedStats));
   for (const [key, value] of Object.entries(presets)) storage.set(key, value);
   const playLog = [];
-  const bodyEl = node('body');
+  const documentListeners = [];
   let now = 0;
   let timerId = 0;
   const timers = [];
-  const context = vm.createContext({
+  const globals = {
     console,
     Audio: class { constructor(src) { this.src = src; } play() { playLog.push(this.src); return Promise.resolve(); } },
     document: {
-      body: bodyEl,
+      body: node('body'),
       getElementById: id => node(id),
-      createElement: () => new Element(),
-      querySelector: () => new Element(),
-      querySelectorAll: selector => {
-        if (selector === '.bet-spot') return allBetSpots();
-        const m = selector.match(/^\.bet-spot\[data-type="([^"]+)"\](?::not\(\[data-selection\]\)|\[data-selection="([^"]+)"\])$/);
-        if (m) {
-          const [, type, selection] = m;
-          return allBetSpots().filter(spot => spot.dataset.type === type && (selection === undefined ? spot.dataset.selection === undefined : spot.dataset.selection === selection));
-        }
-        return [];
-      },
-      addEventListener() {}
+      createElement: tag => new Element(tag),
+      addEventListener: (type, fn) => documentListeners.push({ type, fn })
     },
     localStorage: {
       getItem: key => { if (storageThrows) throw new Error('storage blocked'); return storage.get(key) ?? null; },
@@ -434,7 +484,9 @@ function makeEnvironment(savedStats = null, { storageThrows = false, presets = {
       const index = timers.findIndex(timer => timer.id === id);
       if (index >= 0) timers.splice(index, 1);
     }
-  });
+  };
+  if (audioContext) globals.AudioContext = audioContext;
+  const context = vm.createContext(globals);
   function flushTimers() {
     let count = 0;
     while (timers.length) {
@@ -456,299 +508,530 @@ function makeEnvironment(savedStats = null, { storageThrows = false, presets = {
     }
     return ran;
   }
+  function pressKey(key, { target = { tagName: 'BODY', getAttribute: () => null }, ctrlKey = false } = {}) {
+    const event = { key, target, ctrlKey, metaKey: false, preventDefault() {} };
+    documentListeners.filter(l => l.type === 'keydown').forEach(l => l.fn(event));
+  }
   const source = fs.readFileSync(enginePath, 'utf8') + '\n' + fs.readFileSync(scriptPath, 'utf8');
-  vm.runInContext(source + '\n;globalThis.pageExports = { engine, table, getStats: () => ({...gameStats}), getSession: () => ({...sessionStats}), toggleMute, isMuted: () => soundMuted };', context, { filename: 'roulette-engine.js+roulette.js' });
-  return { ...context.pageExports, node, body: bodyEl, allBetSpots, flushTimers, stepTimers, playLog, storage };
+  vm.runInContext(source + '\n;globalThis.pageExports = { engine, table, getStats: () => ({...gameStats}), getSession: () => ({...sessionStats}), toggleMute, isMuted: () => soundMuted, placementFor, SPIN_MS, POCKET_ANGLE };', context, { filename: 'roulette-engine.js+roulette.js' });
+  const env = { ...context.pageExports, node, flushTimers, stepTimers, playLog, storage, pressKey, timers };
+  env.spot = key => env.table.locations.get(key);
+  env.vars = key => {
+    const s = env.spot(key).style;
+    return Object.fromEntries(['--dr', '--drs', '--dc', '--dcs', '--mr', '--mrs', '--mc', '--mcs'].map(v => [v.slice(2), Number(s.getPropertyValue(v))]));
+  };
+  return env;
 }
 
-function spot(env, type, selection) {
-  return env.allBetSpots().find(s => s.dataset.type === type && (selection === undefined ? s.dataset.selection === undefined : s.dataset.selection === String(selection)));
+// Places chips through the page the way a player would: pick a chip, click the spot.
+function bet(env, key, amount = 5) {
+  env.table.selectAmount(amount);
+  env.spot(key).onclick();
 }
 
-function forcedSpin(env, pocket) {
-  return env.engine.spin(pocket);
+function spinTo(env, pocket) {
+  const started = env.table.spin(pocket);
+  env.flushTimers();
+  return started;
 }
 
-test('Page: the table has 38 bet spots for straight numbers plus 12 outside bets', () => {
+test('Page: the engine and page scripts declare no top-level name twice', () => {
+  // Both files load as plain <script> tags sharing one global scope. A repeated `const`
+  // would throw, but a repeated `function` silently replaces the first one.
+  const decl = /^(?:async\s+)?(?:function\s+([A-Za-z_$][\w$]*)|(?:const|let|var|class)\s+([A-Za-z_$][\w$]*))/gm;
+  const names = file => new Set([...fs.readFileSync(file, 'utf8').matchAll(decl)].map(m => m[1] || m[2]));
+  const engineNames = names(enginePath);
+  const shared = [...names(scriptPath)].filter(n => engineNames.has(n));
+  assert.deepEqual(shared, []);
+});
+
+test('Page: every one of the 158 bets has a spot - 50 boxes, the rest on the lines', () => {
   const env = makeEnvironment();
-  const straights = env.allBetSpots().filter(s => s.dataset.type === 'straight');
-  assert.equal(straights.length, 38);
-  const outside = env.allBetSpots().filter(s => s.dataset.type !== 'straight');
-  assert.equal(outside.length, 12);
+  const tableEl = env.node('betting-table');
+  assert.equal(tableEl.children.length, 158);
+  assert.equal(env.table.locations.size, 158);
+  const cells = tableEl.children.filter(el => el.classList.contains('cell'));
+  const lines = tableEl.children.filter(el => el.classList.contains('line-spot'));
+  assert.equal(cells.length, 38 + 3 + 3 + 6);
+  assert.equal(lines.length, 108);
+  // Line spots come after the boxes, so they sit on top and can be clicked.
+  assert.ok(tableEl.children.indexOf(lines[0]) > tableEl.children.indexOf(cells[cells.length - 1]));
+  assert.ok(lines.every(el => el.tabIndex === -1));
+  assert.equal(env.spot('split:17-20').getAttribute('aria-label'), 'Split 17/20, pays 17 to 1');
 });
 
-test('Page: clicking a chip selects it, and clicking a bet spot places that amount', () => {
+// The grid area an element covers, in half-row units on the desktop layout.
+function area(v) {
+  return { r0: v.dr, r1: v.dr + v.drs - 1, c0: v.dc, c1: v.dc + v.dcs - 1 };
+}
+const overlaps = (a, b) => a.r0 <= b.r1 && b.r0 <= a.r1 && a.c0 <= b.c1 && b.c0 <= a.c1;
+
+test('Page: the boxes tile the table exactly, like a real layout', () => {
   const env = makeEnvironment();
-  env.table.selectAmount(10);
-  assert.equal(env.table.selectedAmount, 10);
-  spot(env, 'red').onclick();
-  assert.equal(env.engine.bets.length, 1);
-  // not assert.deepEqual: the bet object was created inside the vm context (a
-  // different realm), so its prototype differs from a plain object literal here even
-  // with identical fields - compare the fields directly instead.
-  assert.equal(env.engine.bets[0].type, 'red');
-  assert.equal(env.engine.bets[0].selection, null);
-  assert.equal(env.engine.bets[0].amount, 10);
-  assert.equal(env.engine.balance, RouletteEngine.STARTING_BALANCE - 10);
+  const cellKeys = BET_LIST.filter(b => ['straight', 'dozen', 'column', 'evenmoney'].includes(b.kind)).map(b => b.key);
+  const covered = new Map();
+  for (const key of cellKeys) {
+    const a = area(env.vars(key));
+    for (let r = a.r0; r <= a.r1; r++) {
+      for (let c = a.c0; c <= a.c1; c++) {
+        assert.ok(!covered.has(`${r},${c}`), `${key} overlaps ${covered.get(`${r},${c}`)} at ${r},${c}`);
+        covered.set(`${r},${c}`, key);
+      }
+    }
+  }
+  // Numbers, zeros and columns fill rows 1-6 across all 14 columns; dozens and even-money
+  // bets fill rows 7-8 under the numbers (columns 2-13).
+  for (let r = 1; r <= 6; r++) for (let c = 1; c <= 14; c++) assert.ok(covered.has(`${r},${c}`), `gap at ${r},${c}`);
+  for (let r = 7; r <= 8; r++) for (let c = 2; c <= 13; c++) assert.ok(covered.has(`${r},${c}`), `gap at ${r},${c}`);
+  // Spot checks: 3 is top-left, 34 bottom-right, 00 above 0.
+  assert.deepEqual(area(env.vars('straight:3')), { r0: 1, r1: 2, c0: 2, c1: 2 });
+  assert.deepEqual(area(env.vars('straight:34')), { r0: 5, r1: 6, c0: 13, c1: 13 });
+  assert.ok(env.vars('straight:00').dr < env.vars('straight:0').dr);
 });
 
-test('Page: a straight-up bet spot carries its own number as the selection', () => {
+test('Page: every split, corner and trio spot sits on the line between exactly its numbers', () => {
   const env = makeEnvironment();
-  spot(env, 'straight', '17').onclick();
-  assert.equal(env.engine.bets[0].type, 'straight');
-  assert.equal(env.engine.bets[0].selection, '17');
-  const zero = spot(env, 'straight', '0');
-  zero.onclick();
-  assert.equal(env.engine.bets[1].selection, '0');
-});
-
-test('Page: bet spot badges show the cumulative amount wagered on that exact spot', () => {
-  const env = makeEnvironment();
-  env.table.selectAmount(5);
-  spot(env, 'red').onclick();
-  spot(env, 'red').onclick();
-  assert.equal(spot(env, 'red').parts.badge.textContent, '$10');
-  assert.equal(spot(env, 'black').parts.badge.textContent, '');
-  assert.equal(spot(env, 'red').classList.contains('has-bet'), true);
-});
-
-test('Page: Clear Bets refunds everything and clears the badges', () => {
-  const env = makeEnvironment();
-  spot(env, 'red').onclick();
-  spot(env, 'straight', '7').onclick();
-  const before = env.engine.balance;
-  env.table.clearBets();
-  assert.equal(env.engine.balance, RouletteEngine.STARTING_BALANCE);
-  assert.equal(env.engine.bets.length, 0);
-  assert.equal(spot(env, 'red').parts.badge.textContent, '');
-  void before;
-});
-
-test('Page: spinning settles every placed bet and renders the result ball', () => {
-  const env = makeEnvironment();
-  spot(env, 'red').onclick();   // 17 is black -> loses
-  spot(env, 'odd').onclick();   // 17 is odd -> wins
-  forcedSpin(env, '17');
-  env.table.updateUI();
-  assert.equal(env.node('game-container').dataset.phase, 'results');
-  const ball = env.node('result-pocket').children[0];
-  assert.equal(ball.textContent, '17');
-  assert.equal(ball.classList.contains('black'), true);
-  assert.equal(spot(env, 'red').classList.contains('bet-lost'), true);
-  assert.equal(spot(env, 'odd').classList.contains('bet-won'), true);
-});
-
-test('Page: Play Again clears the table for the next spin', () => {
-  const env = makeEnvironment();
-  spot(env, 'red').onclick();
-  forcedSpin(env, '1');
-  env.table.updateUI();
-  env.table.nextRound();
-  assert.equal(env.node('game-container').dataset.phase, 'betting');
-  assert.equal(env.node('result-pocket').children.length, 0);
-  assert.equal(spot(env, 'red').parts.badge.textContent, '');
-});
-
-test('Page: setting the starting balance updates the balance and the restart amount', () => {
-  const env = makeEnvironment();
-  assert.equal(env.table.setBankroll(5000), true);
-  assert.equal(env.engine.balance, 5000);
-  assert.match(env.node('balance').textContent, /\$5,000/);
-  spot(env, 'red').onclick();
-  assert.equal(env.table.setBankroll(100), false);
-  assert.match(env.node('message').textContent, /before placing bets/);
-});
-
-test('Page: going broke shows New Game, which restores the chosen bankroll', () => {
-  const env = makeEnvironment();
-  env.table.setBankroll(4);
-  env.table.selectAmount(4);
-  spot(env, 'straight', '1').onclick();
-  forcedSpin(env, '2'); // guaranteed loss
-  env.table.updateUI();
-  assert.equal(env.engine.balance, 0);
-  assert.equal(env.node('restart').style.display, 'inline-block');
-  env.table.restart();
-  assert.equal(env.engine.balance, 4);
-  assert.equal(env.node('restart').style.display, 'none');
-});
-
-test('Page: statistics track wagering and winnings', () => {
-  const env = makeEnvironment({ spinsPlayed: 2, betsPlaced: 2, totalWagered: 20, totalWon: 15, biggestWin: 10 });
-  assert.equal(env.getSession().spinsPlayed, 0);
-  assert.equal(env.getStats().spinsPlayed, 2);
-  spot(env, 'red').onclick();
-  forcedSpin(env, '1');
-  env.table.updateUI();
-  assert.equal(env.getSession().spinsPlayed, 1);
-  assert.equal(env.getStats().spinsPlayed, 3);
-  assert.match(env.node('stats').textContent, /Session: .*Lifetime: /);
-});
-
-test('Page: mute silences sounds and is remembered across a reload', () => {
-  const env = makeEnvironment();
-  env.toggleMute();
-  assert.equal(env.isMuted(), true);
-  assert.equal(env.storage.get('rouletteMuted'), '1');
-  spot(env, 'red').onclick();
-  assert.equal(env.playLog.length, 0);
-  const restored = makeEnvironment(null, { presets: { rouletteMuted: '1' } });
-  assert.equal(restored.isMuted(), true);
-  assert.equal(restored.node('mute').textContent, 'Sound: Off');
-});
-
-test('Page: the paytable lists every bet with its real odds and the uniform house edge', () => {
-  const env = makeEnvironment();
-  assert.equal(env.node('paytable').hidden, true);
-  env.table.togglePaytable();
-  assert.equal(env.node('paytable').hidden, false);
-  const rows = env.node('paytable-body').children;
-  assert.equal(rows.length, Object.keys(RouletteEngine.BET_TYPES).length);
-  rows.forEach(row => assert.equal(row.parts[3].textContent, '5.26%'));
-});
-
-test('Page: corrupt saved stats fall back to a fresh start', () => {
-  for (const bad of ['{not json', '[]', 'null', '{"spinsPlayed":"x"}']) {
-    const env = makeEnvironment(bad);
-    assert.equal(env.getStats().spinsPlayed, 0, bad);
+  const numberAreas = POCKETS.map(p => [p, area(env.vars(`straight:${p}`))]);
+  for (const bet of BET_LIST.filter(b => ['split', 'corner', 'trio'].includes(b.kind))) {
+    const spotArea = area(env.vars(bet.key));
+    const touched = numberAreas.filter(([, a]) => overlaps(a, spotArea)).map(([p]) => p).sort();
+    assert.deepEqual(touched, [...bet.numbers].sort(), bet.key);
+    // And it straddles a line rather than sitting inside one box.
+    assert.ok(numberAreas.every(([, a]) => !(a.r0 <= spotArea.r0 && spotArea.r1 <= a.r1 && a.c0 <= spotArea.c0 && spotArea.c1 <= a.c1)), `${bet.key} is inside a box`);
   }
 });
 
-test('Page: the game works when localStorage is blocked', () => {
-  const env = makeEnvironment(null, { storageThrows: true });
-  spot(env, 'red').onclick(); // default chip amount is $5; pocket 1 is red, pays 1:1
-  forcedSpin(env, '1');
-  env.table.updateUI();
-  assert.equal(env.engine.balance, RouletteEngine.STARTING_BALANCE - 5 + 10);
+test('Page: street, six-line and basket spots sit on the table\'s edge under their numbers', () => {
+  const env = makeEnvironment();
+  for (const bet of BET_LIST.filter(b => ['street', 'sixline', 'basket'].includes(b.kind))) {
+    const v = env.vars(bet.key);
+    assert.deepEqual([v.dr, v.drs], [6, 2], bet.key); // straddles the bottom edge of the numbers
+    const cols = new Set(bet.numbers.map(p => env.vars(`straight:${p}`).dc));
+    assert.equal(v.dc, Math.min(...cols), bet.key);
+    assert.equal(v.dc + v.dcs - 1, Math.max(...cols), bet.key);
+  }
+});
+
+test('Page: phones get the same table turned sideways', () => {
+  const env = makeEnvironment();
+  for (const bet of BET_LIST) {
+    const v = env.vars(bet.key);
+    assert.deepEqual([v.mr, v.mrs, v.mc, v.mcs], [v.dc, v.dcs, 9 - (v.dr + v.drs - 1), v.drs], bet.key);
+  }
+  // 0 and 00 end up across the top, 1-2-3 the first row below them, 1 on the left.
+  const m = key => env.vars(key);
+  assert.equal(m('straight:0').mr, 1);
+  assert.equal(m('straight:1').mr, 2);
+  assert.ok(m('straight:1').mc < m('straight:2').mc && m('straight:2').mc < m('straight:3').mc);
+});
+
+test('Page: clicking a spot puts the selected chip on it and shows it on the table', () => {
+  const env = makeEnvironment();
+  bet(env, 'corner:22-23-25-26', 25);
+  bet(env, 'corner:22-23-25-26', 100);
+  assert.equal(env.engine.bets['corner:22-23-25-26'], 125);
+  const spot = env.spot('corner:22-23-25-26');
+  assert.equal(spot.parts.chip.textContent, '$125');
+  assert.ok(spot.parts.chip.classList.contains('chip-100'));
+  assert.ok(spot.classList.contains('has-bet'));
+  assert.equal(env.node('balance').textContent, 'Balance: $375');
+  assert.equal(env.node('wagered').textContent, 'On the table: $125');
+  assert.equal(env.node('message').textContent, 'Corner 22/23/25/26: $125');
+  assert.ok(env.playLog.includes('sounds/chip.wav'));
+});
+
+test('Page: a chip you can\'t afford is refused with a message', () => {
+  const env = makeEnvironment();
+  bet(env, 'red', 500);
+  bet(env, 'black', 5);
+  assert.equal(env.engine.bets.black, undefined);
+  assert.match(env.node('message').textContent, /Not enough balance for a \$5 chip/);
+});
+
+test('Page: right-clicking a spot takes that bet back', () => {
+  const env = makeEnvironment();
+  bet(env, 'red', 25);
+  bet(env, 'straight:7', 5);
+  let prevented = false;
+  env.spot('red').oncontextmenu({ preventDefault: () => { prevented = true; } });
+  assert.ok(prevented, 'the browser menu should not open');
+  assert.deepEqual({ ...env.engine.bets }, { 'straight:7': 5 });
+  assert.equal(env.spot('red').parts.chip.textContent, '');
+  assert.equal(env.spot('red').classList.contains('has-bet'), false);
+});
+
+test('Page: hovering a spot lights up exactly the numbers it covers', () => {
+  const env = makeEnvironment();
+  const lit = () => [...env.table.numberCells].filter(([, cell]) => cell.classList.contains('covered')).map(([p]) => p).sort();
+  env.spot('corner:22-23-25-26').onmouseenter();
+  assert.deepEqual(lit(), ['22', '23', '25', '26']);
+  env.spot('basket').onmouseenter();
+  assert.deepEqual(lit(), ['0', '00', '1', '2', '3']);
+  env.spot('basket').onmouseleave();
+  assert.deepEqual(lit(), []);
+});
+
+test('Page: Undo, Clear, Double and Rebet buttons work and enable only when they can', () => {
+  const env = makeEnvironment();
+  const btn = id => env.node(id);
+  assert.equal(btn('undo-button').disabled, true);
+  assert.equal(btn('spin-button').disabled, true);
+  bet(env, 'red', 5);
+  bet(env, 'split:0-00', 1);
+  assert.equal(btn('undo-button').disabled, false);
+  assert.equal(btn('rebet-button').disabled, true);
+  btn('undo-button').click();
+  assert.deepEqual({ ...env.engine.bets }, { red: 5 });
+  btn('double-button').click();
+  assert.deepEqual({ ...env.engine.bets }, { red: 10 });
+  btn('clear-bets').click();
+  assert.deepEqual({ ...env.engine.bets }, {});
+  assert.equal(btn('clear-bets').disabled, true);
+  bet(env, 'odd', 5);
+  spinTo(env, '3');
+  env.node('next-round').click();
+  assert.equal(btn('rebet-button').disabled, false);
+  btn('rebet-button').click();
+  assert.deepEqual({ ...env.engine.bets }, { odd: 5 });
+});
+
+test('Page: while the wheel turns the table is locked and the result stays hidden', () => {
+  const env = makeEnvironment();
+  bet(env, 'red', 25);
+  bet(env, 'straight:17', 5);
+  assert.equal(env.table.spin('17'), true);
+  assert.equal(env.node('game-container').dataset.phase, 'spinning');
+  assert.equal(env.node('message').textContent, 'No more bets.');
+  assert.ok(env.node('result-number').classList.contains('spinning'));
+  assert.equal(env.node('result-number').textContent, '');
+  assert.equal(env.node('history').children.length, 0, 'the history must not give the number away');
+  assert.equal(env.spot('straight:17').classList.contains('bet-won'), false);
+  assert.equal(env.node('wagered').textContent, 'On the table: $30');
+  assert.ok(env.table.locations.get('red').disabled);
+  // Nothing can be changed or started mid-spin.
+  bet(env, 'black', 5);
+  env.spot('red').oncontextmenu({ preventDefault() {} });
+  env.table.undo();
+  assert.equal(env.table.spin(), false);
+  assert.equal(env.table.nextRound(), false);
+  assert.deepEqual({ ...env.engine.lastSpin.results.map(r => r.key) }, { 0: 'red', 1: 'straight:17' });
+  assert.equal(env.getSession().spinsPlayed, 0, 'stats wait for the ball to land');
+});
+
+test('Page: when the ball lands, the result, the winners and the money all show', () => {
+  const env = makeEnvironment();
+  bet(env, 'straight:17', 5);
+  bet(env, 'split:17-20', 5);
+  bet(env, 'red', 25);
+  spinTo(env, '17');
+  assert.equal(env.node('game-container').dataset.phase, 'results');
+  assert.equal(env.node('result-number').textContent, '17 Black');
+  assert.ok(env.node('result-number').classList.contains('pocket-black'));
+  assert.ok(env.table.numberCells.get('17').classList.contains('winning'));
+  assert.equal(env.table.numberCells.get('20').classList.contains('winning'), false);
+  assert.ok(env.spot('straight:17').classList.contains('bet-won'));
+  assert.ok(env.spot('split:17-20').classList.contains('bet-won'));
+  assert.ok(env.spot('red').classList.contains('bet-lost'));
+  assert.equal(env.spot('red').parts.chip.textContent, '$25', 'settled chips stay on show');
+  // 180 + 90 back on 35 bet
+  assert.equal(env.node('message').textContent, 'Winning: Straight up 17, Split 17/20. Paid $270, net +$235.');
+  assert.equal(env.node('balance').textContent, 'Balance: $735');
+  assert.equal(env.node('wagered').textContent, 'Bet this spin: $35');
+  assert.equal(env.node('history').children[0].textContent, '17');
+  assert.deepEqual({ ...env.getSession() }, { spinsPlayed: 1, betsPlaced: 3, totalWagered: 35, totalWon: 270, biggestWin: 270 });
+  assert.equal(env.playLog[env.playLog.length - 1], 'sounds/blackjack.mp3'); // a straight-up hit
+});
+
+test('Page: win and lose sounds follow the net result', () => {
+  const env = makeEnvironment();
+  bet(env, 'red', 5);
+  spinTo(env, '1');
+  assert.equal(env.playLog[env.playLog.length - 1], 'sounds/win.mp3');
+  env.table.nextRound();
+  bet(env, 'red', 5);
+  bet(env, 'black', 5);
+  spinTo(env, '1'); // even money both ways: no net gain
+  assert.equal(env.playLog[env.playLog.length - 1], 'sounds/lose.mp3');
+  assert.equal(env.node('message').textContent, 'Winning: Red. Paid $10, net $0.');
+});
+
+test('Page: the wheel stops with the winning pocket under the pointer, after 5+ full turns', () => {
+  const env = makeEnvironment();
+  let previous = 0;
+  for (const pocket of ['17', '0', '00', '36', '17']) {
+    bet(env, 'red', 1);
+    spinTo(env, pocket);
+    const angle = Number(env.node('wheel-rotor').style.transform.match(/rotate\((-?[\d.]+)deg\)/)[1]);
+    assert.ok(angle >= previous + 5 * 360 - env.POCKET_ANGLE, `${pocket}: only ${angle - previous} degrees`);
+    // Pocket i is drawn i * POCKET_ANGLE clockwise from the top, so turning the wheel by
+    // -i * POCKET_ANGLE (mod 360) brings it to the top.
+    const index = WHEEL_ORDER.indexOf(pocket);
+    let off = ((angle + index * env.POCKET_ANGLE) % 360 + 360) % 360;
+    if (off > 180) off -= 360;
+    assert.ok(Math.abs(off) < env.POCKET_ANGLE / 2, `${pocket} landed ${off.toFixed(2)} degrees off`);
+    previous = angle;
+    env.table.nextRound();
+  }
+});
+
+test('Page: the ball\'s roll is synthesized to last as long as the spin, and respects mute', () => {
+  const starts = [];
+  class FakeParam { setValueAtTime() {} exponentialRampToValueAtTime() {} set value(v) {} }
+  class FakeNode { constructor() { this.frequency = new FakeParam(); this.Q = new FakeParam(); this.gain = new FakeParam(); } connect(n) { return n; } start(when) { starts.push(when); } stop() {} }
+  class FakeContext {
+    constructor() { this.currentTime = 10; this.sampleRate = 8000; this.state = 'running'; this.destination = new FakeNode(); }
+    createBuffer(channels, length) { const data = new Float32Array(length); return { getChannelData: () => data }; }
+    createBufferSource() { return new FakeNode(); }
+    createBiquadFilter() { return new FakeNode(); }
+    createGain() { return new FakeNode(); }
+  }
+  const env = makeEnvironment(null, { audioContext: FakeContext });
+  bet(env, 'red', 5);
+  env.table.spin('1');
+  assert.ok(starts.length > 10, `expected a whir plus a rattle of ticks, got ${starts.length} sounds`);
+  const last = Math.max(...starts);
+  assert.ok(last > 10 + env.SPIN_MS / 1000 - 0.3 && last <= 10 + env.SPIN_MS / 1000, `the final clack at ${last}`);
+  assert.ok(!env.playLog.includes('sounds/card.wav'));
+  env.flushTimers();
+  env.table.nextRound();
+
   env.toggleMute();
-  assert.equal(env.isMuted(), true);
+  starts.length = 0;
+  bet(env, 'red', 5);
+  env.table.spin('1');
+  assert.equal(starts.length, 0);
 });
 
-// ---- Fast-forward ----
-
-test('Page: fast-forward replays the currently placed bets as a repeating pattern', () => {
+test('Page: without Web Audio the spin falls back to a recorded sound', () => {
   const env = makeEnvironment();
-  env.engine.balance = 1_000_000;
-  env.table.selectAmount(3);
-  spot(env, 'red').onclick();
-  spot(env, 'straight', '7').onclick();
-  assert.equal(env.table.canFastForward(), true);
-  env.table.runFastForward(50);
-  assert.equal(env.node('game-container').dataset.fastforward, 'true');
-  assert.equal(env.node('fast-forward-button').disabled, true);
-  env.flushTimers();
-  assert.equal(env.node('game-container').dataset.fastforward, 'false');
+  bet(env, 'red', 5);
+  env.table.spin('1');
+  assert.ok(env.playLog.includes('sounds/card.wav'));
+});
+
+test('Page: Same Bets puts last spin\'s chips back; Same Bets & Spin also spins', () => {
+  const env = makeEnvironment();
+  bet(env, 'straight:5', 5);
+  bet(env, 'dozen1', 25);
+  spinTo(env, '30');
+  assert.equal(env.node('same-bets').disabled, false);
+  env.node('same-bets').click();
   assert.equal(env.engine.phase, 'betting');
-  assert.equal(env.engine.bets.length, 0);
-  assert.equal(env.getSession().spinsPlayed, 50);
-  assert.equal(env.getSession().betsPlaced, 100);
-  assert.equal(env.getSession().totalWagered, 300);
-  const net = env.getSession().totalWon - 300;
-  assert.equal(env.engine.balance, 1_000_000 + net);
-  assert.equal(env.node('fastforward-summary').hidden, false);
-  assert.match(env.node('fastforward-summary').children[0].textContent, /Simulation complete/);
-  assert.match(env.node('fastforward-summary').children[1].innerHTML, /Spins run: 50/);
-});
-
-test('Page: fast-forward requires a bet pattern to replay first', () => {
-  const env = makeEnvironment();
-  assert.equal(env.table.canFastForward(), false);
-  env.table.runFastForward(50);
-  assert.equal(env.node('game-container').dataset.fastforward, 'false');
-});
-
-test('Page: normal betting and spinning are disabled while fast-forwarding', () => {
-  const env = makeEnvironment();
-  env.engine.balance = 1_000_000;
-  spot(env, 'red').onclick();
-  env.table.runFastForward(1000);
-  assert.equal(env.table.placeBet('black', null), false);
-  assert.equal(env.node('custom-amount').disabled, true);
-  assert.equal(env.node('bankroll-amount').disabled, true);
+  assert.deepEqual({ ...env.engine.bets }, { 'straight:5': 5, dozen1: 25 });
+  spinTo(env, '30');
+  env.node('same-bets-spin').click();
+  assert.equal(env.node('game-container').dataset.phase, 'spinning');
   env.flushTimers();
+  assert.equal(env.getSession().spinsPlayed, 3);
+  assert.equal(env.getSession().totalWagered, 90);
 });
 
-test('Page: stopping immediately runs zero spins and reports it', () => {
+test('Page: Same Bets is unavailable when the balance can\'t cover them', () => {
   const env = makeEnvironment();
-  env.engine.balance = 1_000_000;
-  spot(env, 'red').onclick();
-  env.table.runFastForward(1000);
+  env.engine.setBalance(30);
+  bet(env, 'red', 25);
+  spinTo(env, '2'); // lose: $5 left
+  assert.equal(env.node('same-bets').disabled, true);
+  assert.equal(env.node('same-bets-spin').disabled, true);
+  assert.equal(env.table.sameBetsAndSpin(), false);
+  assert.equal(env.engine.phase, 'results', 'a refused Same Bets must not move on to a new round');
+});
+
+test('Page: Enter spins and moves on, but not when pressed on a focused control', () => {
+  const env = makeEnvironment();
+  bet(env, 'red', 5);
+  env.pressKey('Enter', { target: { tagName: 'BUTTON', getAttribute: () => null } }); // a focused table spot
+  env.pressKey('Enter', { target: { tagName: 'DIV', getAttribute: n => (n === 'role' ? 'button' : null) } }); // a chip
+  env.pressKey('Enter', { target: { tagName: 'INPUT', getAttribute: () => null } });
+  assert.equal(env.engine.phase, 'betting');
+  env.pressKey('Enter');
+  assert.equal(env.node('game-container').dataset.phase, 'spinning');
+  env.pressKey('Enter'); // mid-spin: ignored
+  env.flushTimers();
+  assert.equal(env.engine.phase, 'results');
+  env.pressKey('Enter');
+  assert.equal(env.engine.phase, 'betting');
+});
+
+test('Page: Ctrl+Z takes back the last chip', () => {
+  const env = makeEnvironment();
+  bet(env, 'red', 5);
+  bet(env, 'black', 1);
+  env.pressKey('z', { ctrlKey: true });
+  assert.deepEqual({ ...env.engine.bets }, { red: 5 });
+});
+
+test('Page: going broke offers a new game at the chosen starting balance', () => {
+  const env = makeEnvironment();
+  env.table.setBankroll(10);
+  bet(env, 'red', 10);
+  assert.equal(env.node('restart').style.display, 'none');
+  spinTo(env, '00');
+  assert.equal(env.node('restart').style.display, 'inline-block');
+  env.node('restart').click();
+  assert.equal(env.engine.balance, 10);
+  assert.equal(env.engine.phase, 'betting');
+  assert.match(env.node('message').textContent, /start again with \$10/);
+});
+
+test('Page: the starting balance can only be set with an empty table', () => {
+  const env = makeEnvironment();
+  assert.equal(env.table.setBankroll(2500), true);
+  assert.equal(env.node('balance').textContent, 'Balance: $2,500');
+  bet(env, 'red', 5);
+  assert.equal(env.node('set-bankroll').disabled, true);
+  assert.equal(env.table.setBankroll(100), false);
+  assert.equal(env.table.setBankroll(0), false);
+});
+
+test('Page: the paytable shows every kind of bet and flags the basket\'s worse edge', () => {
+  const env = makeEnvironment();
+  const rows = env.node('paytable-body').children;
+  assert.equal(rows.length, 8);
+  const basket = rows.find(r => r.parts[0].textContent.startsWith('Basket'));
+  assert.equal(basket.parts[3].textContent, '7.89%');
+  assert.ok(basket.classList.contains('worse-edge'));
+  assert.equal(rows.filter(r => r.classList.contains('worse-edge')).length, 1);
+  assert.equal(rows[0].parts[1].textContent, '35:1');
+  assert.equal(rows[0].parts[3].textContent, '5.26%');
+});
+
+test('Page: lifetime stats persist; corrupt or blocked storage starts fresh', () => {
+  const saved = { spinsPlayed: 10, betsPlaced: 12, totalWagered: 100, totalWon: 80, biggestWin: 36 };
+  const env = makeEnvironment(saved);
+  bet(env, 'red', 5);
+  spinTo(env, '1');
+  assert.deepEqual(JSON.parse(env.storage.get('rouletteStats')), { spinsPlayed: 11, betsPlaced: 13, totalWagered: 105, totalWon: 90, biggestWin: 36 });
+  assert.equal(makeEnvironment('{not json').getStats().spinsPlayed, 0);
+  assert.equal(makeEnvironment({ spinsPlayed: 'x' }).getStats().spinsPlayed, 0);
+  const blocked = makeEnvironment(null, { storageThrows: true });
+  bet(blocked, 'red', 5);
+  spinTo(blocked, '1');
+  assert.equal(blocked.getSession().spinsPlayed, 1);
+});
+
+test('Page: fast-forward runs the bets on the table many times and reports the real edge', () => {
+  const env = makeEnvironment();
+  env.engine.setBalance(100_000);
+  env.engine.rng = mulberry32(7);
+  bet(env, 'red', 10);
+  bet(env, 'basket', 5);
+  env.node('ff-spins').value = '2000';
+  env.node('fast-forward-button').click();
+  assert.equal(env.node('game-container').dataset.fastforward, 'true');
+  assert.deepEqual({ ...env.engine.bets }, {}, 'the bets become the pattern, not a stake');
+  env.flushTimers();
+  assert.equal(env.node('game-container').dataset.fastforward, 'false');
+  const session = env.getSession();
+  assert.equal(session.spinsPlayed, 2000);
+  assert.equal(session.betsPlaced, 4000);
+  assert.equal(session.totalWagered, 30_000);
+  assert.equal(env.engine.balance, 100_000 - session.totalWagered + session.totalWon);
+  const summary = env.node('fastforward-summary');
+  assert.equal(summary.hidden, false);
+  assert.equal(summary.children[0].textContent, 'Simulation complete');
+  // Stake-weighted edge: (10 * 5.263 + 5 * 7.895) / 15 = 6.14%
+  assert.match(summary.children[1].innerHTML, /house edge on these bets is 6\.14%/);
+  assert.equal(env.engine.phase, 'betting');
+  assert.deepEqual({ ...env.engine.bets }, {});
+});
+
+test('Page: nothing on the table can be touched while a simulation runs', () => {
+  const env = makeEnvironment();
+  env.engine.setBalance(1_000_000);
+  bet(env, 'red', 1);
+  env.table.runFastForward(100_000);
+  assert.equal(env.spot('black').disabled, true);
+  bet(env, 'black', 5);
+  env.table.spin();
+  env.table.undo();
+  env.table.rebet();
+  env.table.setBankroll(5);
+  env.pressKey('Enter');
+  assert.equal(env.table.spinning, false);
   env.table.stopFastForward();
   env.flushTimers();
-  assert.equal(env.getSession().spinsPlayed, 0);
-  assert.match(env.node('fastforward-summary').children[0].textContent, /Stopped early/);
+  assert.equal(env.engine.bets.black, undefined);
+  assert.ok(env.engine.balance > 5);
 });
 
 test('Page: stopping between chunks halts the run partway through', () => {
   const env = makeEnvironment();
-  env.engine.balance = 100_000_000;
-  spot(env, 'red').onclick();
-  env.table.runFastForward(100_000);
-  const ranOneChunk = env.stepTimers(1);
-  assert.equal(ranOneChunk, 1);
-  assert.equal(env.node('game-container').dataset.fastforward, 'true');
+  env.engine.setBalance(100_000_000);
+  bet(env, 'red', 1);
+  const realNow = Date.now;
+  let fake = 0;
+  Date.now = () => (fake += 1); // each spin "takes" 1ms, so a chunk is about 20 spins
+  try {
+    env.table.runFastForward(100_000);
+    assert.equal(env.stepTimers(1), 1);
+  } finally {
+    Date.now = realNow;
+  }
   const spinsSoFar = env.table.ff.spinsRun;
-  assert.ok(spinsSoFar > 0, 'expected at least one spin in the first chunk');
-  assert.ok(spinsSoFar < 100_000, 'expected the first chunk not to finish the whole run');
-
-  env.table.stopFastForward();
+  assert.ok(spinsSoFar > 0 && spinsSoFar < 100_000, `${spinsSoFar} spins in the first chunk`);
+  env.node('ff-stop-button').click();
   env.flushTimers();
   assert.equal(env.node('game-container').dataset.fastforward, 'false');
   assert.equal(env.getSession().spinsPlayed, spinsSoFar);
+  assert.equal(env.node('fastforward-summary').children[0].textContent, 'Stopped early');
 });
 
-test('Page: running out of money stops the simulation and reports why', () => {
+test('Page: running out of money ends the simulation and says so', () => {
   const env = makeEnvironment();
-  spot(env, 'red').onclick();
-  let callsLeft = 4;
-  env.engine.placeBet = (() => {
-    const real = env.engine.placeBet.bind(env.engine);
-    return (type, selection, amount) => (callsLeft-- > 0 ? real(type, selection, amount) : { ok: false, reason: 'insufficient' });
-  })();
+  env.engine.setBalance(20);
+  env.engine.rng = () => 0.01; // always pocket '0'
+  bet(env, 'red', 5);
   env.table.runFastForward(1000);
   env.flushTimers();
   assert.equal(env.getSession().spinsPlayed, 4);
-  assert.match(env.node('fastforward-summary').children[0].textContent, /Ran out of money/);
+  assert.equal(env.engine.balance, 0);
+  assert.equal(env.node('fastforward-summary').children[0].textContent, 'Ran out of money');
+  assert.equal(env.node('restart').style.display, 'inline-block');
 });
 
-test('Page: fast-forward records the biggest SINGLE spin win, not the sum across the run', () => {
+test('Page: fast-forward records the biggest SINGLE spin win, not the run\'s total', () => {
   const env = makeEnvironment();
-  env.engine.rng = () => 0; // deterministic: same pocket drawn every spin
-  const pocket = env.engine.drawPocket();
-  env.table.selectAmount(10);
-  spot(env, 'straight', pocket).onclick(); // guaranteed to hit every single spin
+  env.engine.rng = () => 0; // pocket '0' every spin
+  bet(env, 'straight:0', 10);
   env.table.runFastForward(3);
   env.flushTimers();
-  const perSpinWin = 10 * 36; // stake back + 35:1
-  assert.equal(env.getSession().totalWon, perSpinWin * 3);
-  assert.equal(env.getStats().biggestWin, perSpinWin); // not the sum
+  assert.equal(env.getSession().totalWon, 360 * 3);
+  assert.equal(env.getStats().biggestWin, 360);
 });
 
-test('Page: fuzz - 300 random rounds keep the page and the engine in agreement', () => {
+test('Page: invalid simulation lengths are refused without starting', () => {
   const env = makeEnvironment();
+  bet(env, 'red', 1);
+  for (const n of [0, -5, 2.5, NaN, 100_001]) {
+    env.table.runFastForward(n);
+    assert.equal(env.table.fastForwarding, false, String(n));
+  }
+  assert.deepEqual({ ...env.engine.bets }, { red: 1 });
+});
+
+test('Page: fuzz - 300 random rounds through the page keep balance and stats in agreement', () => {
+  const env = makeEnvironment();
+  const rng = mulberry32(2024);
   const { engine: e, table: t } = env;
-  let adjust = 0;
-  const types = Object.keys(RouletteEngine.BET_TYPES);
+  e.rng = rng;
+  let topUps = 0;
+  const keys = [...BETS.keys()];
   for (let round = 0; round < 300; round++) {
-    if (e.balance < 20) { e.balance += 500; adjust += 500; }
-    const numBets = 1 + Math.floor(Math.random() * 3);
-    for (let i = 0; i < numBets; i++) {
-      const type = types[Math.floor(Math.random() * types.length)];
-      if (type === 'straight') {
-        const pocket = RouletteEngine.POCKETS[Math.floor(Math.random() * RouletteEngine.POCKETS.length)];
-        t.selectAmount(1);
-        spot(env, 'straight', pocket).onclick();
-      } else {
-        t.selectAmount(1);
-        spot(env, type).onclick();
-      }
-    }
-    if (e.bets.length === 0) spot(env, 'red').onclick();
-    t.spin();
+    if (e.balance < 50) { e.balance += 500; topUps += 500; }
+    const n = 1 + Math.floor(rng() * 4);
+    for (let i = 0; i < n; i++) bet(env, keys[Math.floor(rng() * keys.length)], [1, 5, 25][Math.floor(rng() * 3)] > e.balance ? 1 : [1, 5][Math.floor(rng() * 2)]);
+    if (rng() < 0.2) t.undo();
+    if (rng() < 0.1) t.doubleBets();
+    if (e.totalWagered() === 0) bet(env, 'red', 1);
+    assert.equal(t.spin(), true, `round ${round}`);
+    env.flushTimers();
     assert.equal(e.phase, 'results', `round ${round}`);
-    const expectedBalance = 500 + adjust - e.stats.totalWagered + e.stats.totalWon;
-    assert.equal(e.balance, expectedBalance, `round ${round}: balance vs stats disagree`);
-    t.nextRound();
+    const s = env.getSession();
+    assert.equal(e.balance, 500 + topUps - s.totalWagered + s.totalWon, `round ${round}`);
+    assert.equal(env.node('balance').textContent, `Balance: $${e.balance.toLocaleString('en-US')}`);
+    if (rng() < 0.3 && t.canRepeat()) t.sameBets(); else t.nextRound();
+    if (e.totalWagered() > 0) t.clearBets();
   }
 });
 

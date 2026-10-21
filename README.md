@@ -165,59 +165,67 @@ node lottery_verify.cjs
 
 ## ▶️ [Play Roulette](https://mattgrilli.github.io/roulette.html)
 
-An American (double-zero) roulette simulator, play money only. Place straight-up numbers
-or any of the standard outside bets — red/black, odd/even, 1-18/19-36, dozens, columns —
-and spin. This project is not affiliated with or endorsed by any casino — there's no real
-wheel, no real bets, no real payouts.
+An American (double-zero) roulette simulator, play money only. Every bet a real table
+offers is here — straight up, splits, streets, corners, six lines, the zero bets, dozens,
+columns and the even-money bets — on a real horizontal layout with a spinning wheel. This
+project is not affiliated with or endorsed by any casino — there's no real wheel, no real
+bets, no real payouts.
 
 ![Matt's Roulette](roulette-screenshot.png)
 
 ### The point of it
 
-Every bet offered here carries exactly the same real house edge — 5.26% — whether it pays
-1:1 (betting red) or 35:1 (betting a single number). That's not a simplification; it falls
-straight out of the math (38 pockets, and every payout here is priced for exactly 2 fewer
-winning pockets than a fair payout would need). The built-in paytable shows the real odds
-and edge for every bet, computed the same way, not hand-typed.
+Almost every bet on the table carries exactly the same real house edge — 5.26% — whether
+it pays 1:1 (betting red) or 35:1 (betting a single number). That's not a simplification;
+it falls straight out of the math (38 pockets, and every payout is priced as if the wheel
+had only 36). The one exception is the five-number "basket" (0, 00, 1, 2, 3), which pays
+as if it covered six and so costs 7.89% — the paytable flags it. The odds and edges are
+computed from the bets themselves, not hand-typed.
 
 ### Features
 
-- A real betting table: 0, 00, and 1-36, correctly colored, plus the outside bets, with a
-  chip you select and then click a spot to bet
-- Place several bets at once per spin, same as a real table
+- **All 158 bets on a real table layout**: click a number or an outside box, or click the
+  **line between numbers** for a split, the corner where four meet for a corner bet, or
+  the table's edge for a street or six line. Hovering any spot lights up exactly the
+  numbers it covers
+- A real American wheel (in the real pocket order) that spins and stops with the winning
+  pocket under the pointer, with a synthesized ball roll and rattle that lasts as long as
+  the spin
+- Chips stack on the table as you bet; **Undo** (or Ctrl+Z), **Clear**, **Double** every
+  bet, and **Rebet** last spin's bets. Right-click a bet to take it back
+- After a spin, winning and losing bets are marked on the table; **Same Bets** or
+  **Same Bets & Spin** go again in one click
 - **Pick your own starting balance** before betting, which also becomes what a later New
   Game gives back
-- **Simulate many spins at once**: replay your currently placed bets as a repeating
-  pattern for up to 100,000 real, independent spins in a row — a fast way to watch the
-  5.26% edge grind away at a bankroll over a realistic number of trials, not just one spin
-  at a time. Stoppable at any time; ends with a summary
+- **Simulate many spins at once**: replay the bets on the table for up to 100,000 real,
+  independent spins — a fast way to watch the house edge grind away at a bankroll. Ends
+  with a summary comparing what you actually lost with the real edge of those bets
+- On phones the table turns sideways so every number and line stays big enough to tap
 - Session and lifetime statistics; sound effects with a mute button; a Paytable toggle
 
 ### Rules
 
 - American double-zero wheel: 38 pockets (0, 00, 1-36), 18 red and 18 black, 0 and 00
   green. 0 and 00 lose every outside bet (no surrender/en-prison rule).
-- Straight up pays 35:1, the six outside even-chance bets (red/black, odd/even, 1-18/
-  19-36) pay 1:1, and dozens/columns pay 2:1. Every one of these has exactly a 5.26% house
-  edge.
-- Not offered: the inside combination bets (split, street, corner, six-line) or the
-  American-only five-number 0/00/1/2/3 "basket" bet, which is the one well-known exception
-  with a worse 7.89% edge. See Future Improvements.
+- Payouts: straight up 35:1, split 17:1, street and trio (0-1-2 or 00-2-3) 11:1, corner
+  8:1, basket 6:1, six line 5:1, dozens and columns 2:1, red/black, odd/even and
+  1-18/19-36 1:1.
 
 ### How It's Built
 
-- `roulette-engine.js` — the wheel, the bet menu and the real odds math. No browser code,
-  so it can be tested in plain Node; it reports what happens through events.
-- `roulette.js` — the page: the betting table, chips, sounds and statistics, all in
-  reaction to the engine's events.
+- `roulette-engine.js` — the wheel, the catalogue of every bet and the odds math. No
+  browser code, so it can be tested in plain Node; it reports what happens through events.
+- `roulette.js` — the page: the wheel, the betting table (every spot placed on one grid,
+  turned sideways for phones), chips, sounds and statistics.
 - `roulette.html` and `roulette-styles.css` — the markup and styling.
 
 ### Testing
 
-`roulette_verify.cjs` checks that every bet type's house edge matches the real, published
-5.26% American roulette edge (re-derived independently from the bet menu's own win
-conditions, not just echoed from a table), plus the page wiring in a mocked browser, plus
-random-play fuzz tests that check no money is ever created or lost:
+`roulette_verify.cjs` checks that every one of the 158 bets covers numbers that really
+touch on the table and wins on exactly those, that every house edge is the real 5.26%
+(7.89% for the basket) computed two independent ways, that every spot on the page sits
+on the line between exactly the numbers it covers, plus the rest of the page wiring in a
+mocked browser and random-play fuzz tests that check no money is ever created or lost:
 
 ```
 node roulette_verify.cjs
@@ -225,9 +233,8 @@ node roulette_verify.cjs
 
 ### Future Improvements
 
-- The inside combination bets (split, street, corner, six-line) and the five-number basket
-  bet, which would need precise spatial click-zones on the table
 - A European (single-zero) wheel option, with its better 2.70% house edge
+- Call bets (voisins, tiers, orphelins) on a racetrack
 
 ---
 
