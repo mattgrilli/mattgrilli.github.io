@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Matt's Baccarat</title>
+    <meta name="theme-color" content="#0b0b0d">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0b0d'/%3E%3Ctext x='32' y='44' font-size='30' font-family='Georgia,serif' font-style='italic' text-anchor='middle' fill='%23d9b44a'%3EB%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="baccarat-styles.css">
+</head>
+<body>
+    <div id="game-container" data-phase="betting" data-fastforward="false">
+        <div id="top-bar">
+            <h1>Matt's Baccarat</h1>
+            <div id="other-games">
+                <a class="other-game" href="blackjack.html">🃏 Blackjack</a>
+                <a class="other-game" href="lottery.html">🎟️ Lucky Draw</a>
+                <a class="other-game" href="roulette.html">🎰 Roulette</a>
+            </div>
+            <div id="game-info">
+                <div id="stats-bar">
+                    <div id="balance">Balance: $1,000</div>
+                    <div id="wagered">Wagered: $0</div>
+                </div>
+                <div id="shoe-container" title="Cards left in the 8-deck shoe">
+                    <div id="shoe"><div id="shoe-fill"></div></div>
+                    <div id="cards-remaining">416 cards</div>
+                </div>
+            </div>
+            <div id="top-buttons">
+                <button id="mute" aria-pressed="true">Sound: On</button>
+                <button id="toggle-paytable" aria-pressed="false" title="See each bet's exact odds and house edge">Paytable</button>
+            </div>
+        </div>
+
+        <div id="message" role="status" aria-live="polite"></div>
+
+        <div id="paytable" hidden>
+            <table>
+                <caption>Exact odds &amp; house edge, 8-deck shoe</caption>
+                <thead>
+                    <tr><th scope="col">Bet</th><th scope="col">Pays</th><th scope="col">Wins</th><th scope="col">House edge</th></tr>
+                </thead>
+                <tbody id="paytable-body"></tbody>
+            </table>
+            <p id="paytable-note">
+                Computed exactly by enumerating every way a hand can be dealt from a fresh 8-deck shoe,
+                using the same third-card rules the game plays by. Banker is the best bet on the table even
+                after its 5% commission; Tie looks tempting at 8:1 but costs you over 14 cents on the dollar.
+                Not affiliated with or endorsed by any casino. Play money only &mdash; no real bets, no real
+                cards, no real payouts.
+            </p>
+        </div>
+
+        <div id="hands-area">
+            <div class="hand-panel" id="player-panel">
+                <div class="hand-title"><span class="hand-name">Player</span><span class="score" id="player-score" hidden></span></div>
+                <div class="hand-cards" id="player-cards"></div>
+            </div>
+            <div class="hand-panel" id="banker-panel">
+                <div class="hand-title"><span class="hand-name">Banker</span><span class="score" id="banker-score" hidden></span></div>
+                <div class="hand-cards" id="banker-cards"></div>
+            </div>
+        </div>
+
+        <div id="bet-spots"></div>
+
+        <div id="scoreboard">
+            <div id="bead-road" aria-label="Recent results"></div>
+            <div id="scoreboard-counts"></div>
+        </div>
+
+        <div id="fastforward-summary" hidden></div>
+
+        <div id="dock">
+            <div id="betting-dock" class="dock-panel">
+                <div id="bankroll-controls">
+                    <label for="bankroll-amount">Start with $</label>
+                    <input type="number" id="bankroll-amount" min="1" step="1" inputmode="numeric" placeholder="1000" aria-label="Starting balance in dollars">
+                    <button id="set-bankroll">Set</button>
+                </div>
+                <div id="chip-container"></div>
+                <div id="bet-controls">
+                    <button id="clear-bets">Clear Bets</button>
+                    <input type="number" id="custom-amount" min="1" step="1" inputmode="numeric" placeholder="Custom $" aria-label="Custom chip amount">
+                    <button id="set-custom-amount">Use</button>
+                    <button id="deal-button">Deal</button>
+                </div>
+                <div id="fastforward-controls">
+                    <label for="ff-hands">Simulate</label>
+                    <input type="number" id="ff-hands" min="1" step="1" value="1000" inputmode="numeric" aria-label="Number of hands to simulate">
+                    <label for="ff-hands">hands with these bets</label>
+                    <button id="fast-forward-button">Run</button>
+                </div>
+            </div>
+            <div id="fastforward-dock" class="dock-panel">
+                <div id="ff-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                    <div id="ff-progress-fill"></div>
+                </div>
+                <div id="ff-progress-label"></div>
+                <button id="ff-stop-button">Stop</button>
+            </div>
+            <div id="results-dock" class="dock-panel">
+                <button id="next-round">Next Hand</button>
+                <button id="rebet">Same Bets Again</button>
+                <button id="restart">New Game</button>
+            </div>
+        </div>
+
+        <div id="stats"></div>
+    </div>
+    <script src="baccarat-engine.js"></script>
+    <script src="baccarat.js"></script>
+</body>
+</html>

@@ -229,6 +229,72 @@ node roulette_verify.cjs
   bet, which would need precise spatial click-zones on the table
 - A European (single-zero) wheel option, with its better 2.70% house edge
 
+---
+
+## 👑 Also in This Repo: Matt's Baccarat
+
+## ▶️ [Play Baccarat](https://mattgrilli.github.io/baccarat.html)
+
+A Punto Banco baccarat simulator, play money only, dealt from a real 8-deck shoe. Bet on
+Player, Banker or Tie and deal — there are no decisions after that, because the third-card
+rules are fixed and the game applies them for you. Not affiliated with or endorsed by any
+casino — no real cards, no real bets, no real payouts.
+
+![Matt's Baccarat](baccarat-screenshot.png)
+
+### The point of it
+
+Baccarat has the lowest house edge in the casino for a plain bet — and also one of the
+worst. Banker costs you about 1.06 cents per dollar even after its 5% commission; Player
+about 1.24 cents. Tie pays 8:1 and looks generous, but it costs over 14 cents per dollar.
+The built-in paytable shows all three, computed exactly (see below), and the scoreboard
+of recent results is a reminder that streaks you see there change nothing about the next
+hand.
+
+### Features
+
+- Player, Banker and Tie bets, several at once, with chips and a custom amount
+- A real 8-deck shoe with a cut card and a shoe indicator; cards dealt and animated in
+  the actual dealing order
+- A bead-road scoreboard of the last 60 results
+- **Same Bets Again** to repeat the previous hand's bets
+- **Pick your own starting balance**, which also becomes what a later New Game gives back
+- **Simulate many hands at once**: replay your current bets for up to 100,000 real hands,
+  then compare how often Banker, Player and Tie actually won against their exact odds
+- Session and lifetime statistics; sound effects with a mute button; a Paytable toggle
+
+### Rules
+
+- Card points: Ace 1, 2-9 face value, 10/J/Q/K 0. A hand's total is the last digit of its
+  points, so it is always 0-9.
+- Player and Banker get two cards each. An 8 or 9 is a natural and ends the hand.
+- Otherwise Player draws on 0-5 and stands on 6-7. If Player stood, Banker draws on 0-5.
+  If Player drew, Banker follows the standard tableau based on its total and Player's
+  third card.
+- Player pays 1:1, Banker pays 1:1 less a 5% commission (rounded up to the cent), Tie pays
+  8:1. Player and Banker bets are returned on a tie.
+
+### How It's Built
+
+- `baccarat-engine.js` — the shoe, the third-card rules, settlement and the exact odds. No
+  browser code. All money in the engine is kept in integer cents, so the 5% commission
+  never introduces floating-point drift.
+- `baccarat.js` — the page: the hands, betting spots, scoreboard, sounds and statistics.
+- `baccarat.html` and `baccarat-styles.css` — the markup and styling.
+
+### Testing
+
+`baccarat_verify.cjs` computes the exact odds by enumerating every way a hand can be dealt
+from a fresh 8-deck shoe and checks them against the published figures (Banker 45.8597%,
+Player 44.6247%, Tie 9.5156%; edges 1.06% / 1.24% / 14.36%). It also checks the full Banker
+tableau case by case, runs 500,000 seeded hands through the real shoe to confirm the
+dealing code converges to those odds, tests the page in a mocked browser, and fuzzes
+random hands to confirm no cent is ever created or lost:
+
+```
+node baccarat_verify.cjs
+```
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
